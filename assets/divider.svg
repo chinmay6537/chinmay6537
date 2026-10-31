@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 8" width="1000" height="8" role="img" aria-label="">
+<title></title>
+<style>
+@keyframes glow{50%{opacity:.45}}
+.line{animation:glow 6s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+<linearGradient id="fade"><stop offset="0" stop-color="#B3261E" stop-opacity="0"/><stop offset=".5" stop-color="#B3261E"/><stop offset="1" stop-color="#B3261E" stop-opacity="0"/></linearGradient>
+<rect class="line" y="3.5" width="1000" height="1" fill="url(#fade)"/>
+</svg>

@@ -1,0 +1,53 @@
+name: Update the honor cards
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/honor.yml"
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PALETTE: bg_color=0B0B0A&title_color=E8E2D4&text_color=8C857A&icon_color=B3261E&ring_color=B3261E&border_color=2A2724&border_radius=10
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate the stats card
+        uses: stats-organization/github-readme-stats-action@v2
+        with:
+          card: stats
+          options: username=${{ github.repository_owner }}&show_icons=true&custom_title=Ledger&${{ env.PALETTE }}
+          path: assets/honor-stats.svg
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_error: "true"
+
+      - name: Generate the languages card
+        uses: stats-organization/github-readme-stats-action@v2
+        with:
+          card: top-langs
+          options: username=${{ github.repository_owner }}&layout=donut&langs_count=5&custom_title=Languages&${{ env.PALETTE }}
+          path: assets/honor-langs.svg
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_error: "true"
+
+      - name: Tint the languages to the palette
+        run: python3 scripts/tint_langs.py assets/honor-langs.svg
+
+      - name: Commit if they changed
+        run: |
+          git add assets/honor-stats.svg assets/honor-langs.svg
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Update the honor cards"
+            git push
+          fi
