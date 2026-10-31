@@ -1,0 +1,41 @@
+name: Update the trail
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/trail.yml"
+      - "scripts/build.py"
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Redraw the map from live GitHub data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pip install --quiet fonttools
+          python scripts/build.py --trail
+
+      - name: Commit if it changed
+        run: |
+          git add assets/trail.svg
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Update the trail"
+            git push
+          fi
