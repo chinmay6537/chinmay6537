@@ -235,7 +235,7 @@ def hero():
     cycle = 18
     draw_name = lambda color: title("CHINMAY S", 52, 172, 158, color, 3)
     slices, glitch_css, clips = glitch_copies(draw_name, 800, [(50, 22), (88, 18), (118, 26), (150, 14)], 7)
-    targets = [(210, 330, "01", "BYTEPAD"), (564, 340, "02", "ACCORD"), (940, 96, "03", "PROCTORSENSE"), (1110, 226, "04", "RVU LIBRARY")]
+    targets = [(210, 330, "01", "BYTEPAD"), (564, 340, "02", "ACCORD"), (940, 96, "03", "PROCTORSENSE"), (1085, 226, "04", "RVU LIBRARY")]
     target_svg, target_css = "", ""
     for i, (x, y, number, name) in enumerate(targets):
         t0 = 62 + i * 5
