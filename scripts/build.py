@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Generates every themed SVG in assets/. Needs fonttools; text is converted to
-outlines because GitHub renders README SVGs in <img>, where web fonts can't load.
+"""Generates every animated SVG in assets/ from the art baked by bake.py.
 
-  python scripts/build.py          static art plus the live trail
-  python scripts/build.py --trail  only the live trail (GITHUB_TOKEN required)
+  python scripts/build.py          everything (local only: headlines need Chinese Rocks)
+  python scripts/build.py --trail  only the live map (GITHUB_TOKEN required; open fonts only)
+
+Text becomes outlines because GitHub shows README SVGs in <img>, where web fonts can't load.
+Chinese Rocks' licence allows fixed artwork only: the font lives in the git-ignored
+fonts/private/, each phrase is drawn as a single path, and the GitHub Action never uses it.
 """
+import base64
 import json
 import math
 import os
@@ -20,21 +24,21 @@ from fontTools.ttLib import TTFont
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "assets"
+ART = ROOT / "art"
 LOGIN = "chinmay6537"
 SKIP_LANGUAGE_REPOS = {LOGIN, "github-slideshow"}
 
-BLACK, CHAR, EARTH = "#0b0706", "#160d09", "#2a1810"
-BLOOD, EMBER, GOLD = "#8e1616", "#b3201f", "#b8893b"
-BONE, PAPER, INK = "#efe4c8", "#d9c49a", "#231710"
-
-
+BLACK, CHAR = "#070403", "#120b08"
+BLOOD, EMBER, GOLD = "#8e1616", "#d3211f", "#c79a4b"
+BONE, INK = "#f1e7d0", "#231710"
+GALLOP = json.loads((ROOT / "scripts" / "gallop.json").read_text())
 GLYPHS = {}
 
 
 class Face:
     def __init__(self, filename, prefix):
-        self.prefix = prefix
         self.font = TTFont(ROOT / "fonts" / filename)
+        self.prefix = prefix
         self.glyphs = self.font.getGlyphSet()
         self.cmap = self.font.getBestCmap()
         self.upem = self.font["head"].unitsPerEm
@@ -42,31 +46,41 @@ class Face:
     def _name(self, char):
         name = self.cmap.get(ord(char))
         if name is None:
-            raise ValueError(f"no glyph for {char!r}")
+            raise ValueError(f"{self.prefix}: no glyph for {char!r}")
         return name
 
     def width(self, string, size, tracking=0):
         scale = size / self.upem
         return sum(self.glyphs[self._name(c)].width * scale + tracking for c in string) - tracking
 
-    def glyph_id(self, name):
-        key = f"{self.prefix}{self.font.getGlyphID(name)}"
-        if key not in GLYPHS:
-            pen = SVGPathPen(self.glyphs, ntos=lambda v: str(round(v)))
-            self.glyphs[name].draw(pen)
-            GLYPHS[key] = pen.getCommands()
-        return key
+    def _start(self, string, x, size, tracking, anchor):
+        return x if anchor == "start" else x - self.width(string, size, tracking) / (2 if anchor == "middle" else 1)
+
+    def phrase(self, string, x, y, size, tracking=0, anchor="start"):
+        """The whole phrase as one fixed path."""
+        x = self._start(string, x, size, tracking, anchor)
+        scale = size / self.upem
+        pen = SVGPathPen(self.glyphs, ntos=lambda v: f"{v:.1f}".rstrip("0").rstrip("."))
+        for char in string:
+            glyph = self.glyphs[self._name(char)]
+            glyph.draw(TransformPen(pen, (scale, 0, 0, -scale, x, y)))
+            x += glyph.width * scale + tracking
+        return pen.getCommands()
 
     def uses(self, string, x, y, size, tracking=0, anchor="start"):
         """One <use> per letter, so a glyph's outline is only stored once per SVG."""
-        if anchor != "start":
-            x -= self.width(string, size, tracking) / (2 if anchor == "middle" else 1)
+        x = self._start(string, x, size, tracking, anchor)
         scale = size / self.upem
         cursor, parts = 0.0, []
         for char in string:
             name = self._name(char)
-            if self.glyphs[name].width and char != " ":
-                parts.append(f'<use href="#{self.glyph_id(name)}" x="{cursor:.0f}"/>')
+            if char != " ":
+                key = f"{self.prefix}{self.font.getGlyphID(name)}"
+                if key not in GLYPHS:
+                    pen = SVGPathPen(self.glyphs, ntos=lambda v: str(round(v)))
+                    self.glyphs[name].draw(pen)
+                    GLYPHS[key] = pen.getCommands()
+                parts.append(f'<use href="#{key}" x="{cursor:.0f}"/>')
             cursor += self.glyphs[name].width + tracking / scale
         return f'transform="translate({x:.1f} {y:.1f}) scale({scale:.5f} {-scale:.5f})"', "".join(parts)
 
@@ -74,12 +88,24 @@ class Face:
 RYE = Face("Rye-Regular.ttf", "r")
 FELL = Face("IMFellEnglish-Regular.ttf", "f")
 HAND = Face("HomemadeApple-Regular.ttf", "h")
+MONO = Face("ShareTechMono-Regular.ttf", "m")
+_rocks = None
 
 
-def text(face, string, x, y, size, fill=INK, tracking=0, anchor="start", extra=""):
+def rocks():
+    global _rocks
+    if _rocks is None:
+        _rocks = Face("private/ChineseRocks.otf", "c")
+    return _rocks
+
+
+def text(face, string, x, y, size, fill=BONE, tracking=0, anchor="start", extra=""):
     transform, uses = face.uses(string, x, y, size, tracking, anchor)
-    inner = f'<g {transform} fill="{fill}">{uses}</g>'
-    return f"<g {extra}>{inner}</g>" if extra else inner
+    return f'<g {transform} fill="{fill}" {extra}>{uses}</g>'
+
+
+def title(string, x, y, size, fill=BONE, tracking=0, anchor="start", extra=""):
+    return f'<path d="{rocks().phrase(string, x, y, size, tracking, anchor)}" fill="{fill}" {extra}/>'
 
 
 def wrap(face, string, size, width):
@@ -94,30 +120,22 @@ def wrap(face, string, size, width):
     return lines + [line]
 
 
-def paragraph(face, string, x, y, size, width, leading, fill=INK):
-    lines = wrap(face, string, size, width)
-    return "".join(text(face, l, x, y + i * leading, size, fill) for i, l in enumerate(lines)), y + len(lines) * leading
+def art(name, x=0, y=0, w=None, h=None, extra=""):
+    data = base64.b64encode((ART / name).read_bytes()).decode()
+    size = (f'width="{w}" ' if w else "") + (f'height="{h}" ' if h else "")
+    return f'<image href="data:image/webp;base64,{data}" x="{x}" y="{y}" {size}preserveAspectRatio="xMidYMid slice" {extra}/>'
 
 
-DEFS = """
-<filter id="ink" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency=".7" numOctaves="2" seed="3"/><feDisplacementMap in="SourceGraphic" scale="1.8"/></filter>
-<filter id="stamp" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency=".55" numOctaves="3" seed="9" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="2.5" result="d"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -4 3.2" result="holes"/><feComposite in="d" in2="holes" operator="in"/></filter>
-<filter id="paper" x="-3%" y="-3%" width="106%" height="106%"><feTurbulence type="fractalNoise" baseFrequency=".03 .045" numOctaves="5" seed="11" result="n"/><feColorMatrix in="n" type="matrix" values="0 0 0 0 .32 0 0 0 0 .19 0 0 0 0 .07 0 0 0 1.5 -.58" result="stain"/><feComposite in="stain" in2="SourceGraphic" operator="in" result="s"/><feMerge result="m"><feMergeNode in="SourceGraphic"/><feMergeNode in="s"/></feMerge><feTurbulence type="fractalNoise" baseFrequency=".035" numOctaves="4" seed="5" result="t"/><feDisplacementMap in="m" in2="t" scale="11" xChannelSelector="R" yChannelSelector="G"/></filter>
-<filter id="brush" x="-8%" y="-40%" width="116%" height="180%"><feTurbulence type="fractalNoise" baseFrequency=".006 .22" numOctaves="3" seed="4"/><feDisplacementMap in="SourceGraphic" scale="46" xChannelSelector="R" yChannelSelector="G"/></filter>
-<filter id="wood" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".004 .16" numOctaves="4" seed="8"/><feColorMatrix type="matrix" values="0 0 0 0 .20 0 0 0 0 .11 0 0 0 0 .06 0 0 0 1.9 -.62"/><feComposite in2="SourceGraphic" operator="over"/></filter>
-<filter id="clouds" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".0035 .05" numOctaves="5" seed="21"/><feColorMatrix type="matrix" values="0 0 0 0 .05 0 0 0 0 .02 0 0 0 0 .02 0 0 0 2.6 -1.05"/></filter>
-<filter id="glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="30"/></filter>
-<radialGradient id="burn" cx="50%" cy="50%" r="72%"><stop offset="58%" stop-color="#4a2b12" stop-opacity="0"/><stop offset="100%" stop-color="#2b1407" stop-opacity=".85"/></radialGradient>
-<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b0706"/><stop offset=".34" stop-color="#2b0a09"/><stop offset=".62" stop-color="#8e1616"/><stop offset=".84" stop-color="#d2491e"/><stop offset="1" stop-color="#eb9b45"/></linearGradient>
-"""
+BASE_CSS = ("@media (prefers-reduced-motion:reduce){*{animation:none!important}.fr0,.w0{opacity:1!important}}"
+            ".pop{transform-box:fill-box;transform-origin:center}")
 
 
-def svg(width, height, body, label, style=""):
-    style = f"<style>{style}</style>" if style else ""
+def svg(width, height, body, label, style="", defs=""):
     outlines = "".join(f'<path id="{key}" d="{d}"/>' for key, d in GLYPHS.items())
     GLYPHS.clear()
+    label = label.replace('"', "'").replace("&", "and")
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
-            f'role="img" aria-label="{label}"><defs>{DEFS}{outlines}</defs>{style}{body}</svg>\n')
+            f'role="img" aria-label="{label}"><defs>{defs}{outlines}</defs><style>{BASE_CSS}{style}</style>{body}</svg>\n')
 
 
 def save(name, content):
@@ -125,99 +143,167 @@ def save(name, content):
     print(f"{name}: {len(content) // 1024} KB")
 
 
-def parchment(x, y, w, h, fill=PAPER):
-    return (f'<g filter="url(#paper)"><rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{fill}"/>'
-            f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="url(#burn)"/></g>')
+SCANLINES = ('<pattern id="scan" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="1.3" fill="#000"/></pattern>')
 
 
-def ridge(rng, width, base, rough, step=24, fill=BLACK):
-    points, y = [f"0,{base + 200}"], base
-    for x in range(0, width + step, step):
-        y += rng.uniform(-rough, rough)
-        y += (base - y) * 0.18
-        points.append(f"{x},{y:.1f}")
-    points.append(f"{width},{base + 200}")
-    return f'<polygon points="{" ".join(points)}" fill="{fill}"/>'
+def scanlines(w, h, opacity=.22):
+    return f'<rect width="{w}" height="{h}" fill="url(#scan)" opacity="{opacity}"/>'
 
 
-def butte(rng, x, width, height, ground, fill):
-    top = ground - height
-    inset = width * 0.16
-    points = [(x, ground), (x + inset * 0.6, ground - height * 0.38), (x + inset, ground - height * 0.5), (x + inset * 1.05, top)]
-    for i in range(1, 6):
-        points.append((x + inset + (width - 2 * inset) * i / 6, top + rng.uniform(-3, 3)))
-    points += [(x + width - inset, top), (x + width - inset * 0.9, ground - height * 0.55), (x + width - inset * 0.4, ground - height * 0.32), (x + width, ground)]
-    return f'<polygon points="{" ".join(f"{a:.1f},{b:.1f}" for a, b in points)}" fill="{fill}"/>'
+def brackets(x, y, w, h, arm=22, color=EMBER, width=2.4, extra=""):
+    x1, y1 = x + w, y + h
+    d = (f"M{x} {y + arm}V{y}H{x + arm}M{x1 - arm} {y}H{x1}V{y + arm}"
+         f"M{x1} {y1 - arm}V{y1}H{x1 - arm}M{x + arm} {y1}H{x}V{y1 - arm}")
+    return f'<path d="{d}" fill="none" stroke="{color}" stroke-width="{width}" {extra}/>'
 
 
-def cactus(x, y, s, fill=BLACK):
-    w = 5 * s
-    return (f'<g fill="none" stroke="{fill}" stroke-linecap="round" stroke-linejoin="round">'
-            f'<path stroke-width="{w}" d="M{x} {y}V{y - 50 * s}"/>'
-            f'<path stroke-width="{w * .72}" d="M{x} {y - 20 * s}H{x - 12 * s}V{y - 36 * s}M{x} {y - 26 * s}H{x + 12 * s}V{y - 44 * s}"/></g>')
+def gallop_defs(fill=BLACK):
+    """Muybridge's plates, with the jockey's cap swapped for a cowboy hat."""
+    frames = []
+    for i, frame in enumerate(GALLOP):
+        top = frame["top"]
+        hat = (f'<ellipse cx="0" cy="{top + 3.2}" rx="8.2" ry="1.7"/>'
+               f'<path d="M-4.2 {top + 3}C-4 {top - 3.6}-1.5 {top - 3.4} 0 {top - 2.4}C1.5 {top - 3.4} 4 {top - 3.6} 4.2 {top + 3}Z"/>')
+        frames.append(f'<g id="gf{i}"><path d="{frame["d"]}" fill-rule="evenodd"/>{hat}</g>')
+    return "".join(frames)
 
 
-def rider(x, y, s, fill=BLACK):
-    return (f'<g transform="translate({x} {y}) scale({s})" fill="{fill}">'
-            '<ellipse cx="46" cy="-44" rx="27" ry="12"/><ellipse cx="24" cy="-45" rx="12" ry="13"/>'
-            '<polygon points="60,-53 71,-58 83,-79 75,-84 63,-69 50,-55"/>'
-            '<polygon points="75,-85 89,-74 97,-66 93,-61 84,-66 73,-74"/><polygon points="77,-84 79,-91 82,-81"/>'
-            '<path d="M14-54C4-50 4-30 7-18C11-30 13-42 17-46Z"/>'
-            f'<g fill="none" stroke="{fill}" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round">'
-            '<path d="M21-38L17-22L20-2"/><path d="M31-36L31-20L27-2"/><path d="M63-38L65-20L64-2"/><path d="M56-38L54-20L57-2"/>'
-            '<path stroke-width="5.4" d="M44-55L51-41L47-30"/><path stroke-width="4" d="M43-75L54-65L62-63"/><path stroke-width=".9" d="M62-63L86-68"/></g>'
-            '<polygon points="37,-55 51,-55 50,-78 42,-83 35,-76"/><polygon points="37,-58 32,-48 39,-50"/>'
-            '<circle cx="44" cy="-87" r="4.6"/><ellipse cx="44" cy="-91" rx="11.5" ry="2.1"/><rect x="39" y="-99" width="10" height="8.5" rx="2.4"/></g>')
+def rider(x, y, scale, fill=BLACK, period=.62, phase=0.0, extra=""):
+    count = len(GALLOP)
+    frames = "".join(
+        f'<use href="#gf{i}" class="fr{" fr0" if i == 0 else ""}" style="animation-delay:{(i * period / count) - period - phase:.3f}s"/>'
+        for i in range(count))
+    return f'<g transform="translate({x} {y}) scale({scale})" fill="{fill}" {extra}>{frames}</g>'
 
 
-def telegraph(x0, step, count, ground, height, fill=BLACK):
-    parts = []
-    for i in range(count):
-        x = x0 + i * step
-        parts.append(f'<path d="M{x} {ground}V{ground - height}M{x - 7} {ground - height + 4}H{x + 7}" stroke="{fill}" stroke-width="2" fill="none"/>')
-        if i < count - 1:
-            parts.append(f'<path d="M{x + 7} {ground - height + 4}Q{x + step / 2} {ground - height + 15} {x + step + 7} {ground - height + 4}" stroke="{fill}" stroke-width=".7" fill="none"/>')
-    return "".join(parts)
+def gallop_css(period=.62):
+    return (f".fr{{opacity:0;animation:gf {period}s step-end infinite}}"
+            f"@keyframes gf{{0%{{opacity:1}}{100 / len(GALLOP):.2f}%{{opacity:0}}100%{{opacity:0}}}}")
 
 
-def birds():
-    flock = [(0, 90, 1), (26, 76, .8), (52, 102, .9), (70, 84, .7), (98, 96, .6)]
-    shapes = "".join(f'<path transform="translate({x} {y}) scale({s})" d="M-8 0Q-4-5 0 0Q4-5 8 0Q4-2 0 2Q-4-2-8 0Z" fill="{BLACK}"/>' for x, y, s in flock)
-    return f'<g class="flock">{shapes}</g>'
+def glitch_copies(draw, width, ys, period=9, ident="g"):
+    """Slices of the drawing that jump sideways for a blink, then snap back."""
+    parts, css, clips = [], [], []
+    for i, (top, height) in enumerate(ys):
+        at = 12 + i * 11
+        shift = [-16, 12, -8, 18][i % 4]
+        css.append(f"@keyframes {ident}{i}{{0%,{at}%,{at + 1.6}%,100%{{opacity:0;transform:none}}"
+                   f"{at + .1}%,{at + 1.5}%{{opacity:1;transform:translateX({shift}px)}}}}"
+                   f".{ident}{i}{{opacity:0;animation:{ident}{i} {period}s linear infinite}}")
+        clips.append(f'<clipPath id="{ident}c{i}"><rect x="-40" y="{top}" width="{width + 80}" height="{height}"/></clipPath>')
+        parts.append(f'<g clip-path="url(#{ident}c{i})"><g class="{ident}{i}">{draw(EMBER if i % 2 else "#8ff0ea")}</g></g>')
+    return "".join(parts), "".join(css), "".join(clips)
+
+
+def radar(cx, cy, r, label):
+    ticks = "".join(f'<path d="M0 {-r}V{-r + (9 if i % 3 == 0 else 5)}" stroke="{BONE}" stroke-opacity=".6" transform="rotate({i * 15})"/>' for i in range(24))
+    rng = random.Random(1907)
+    blips = ""
+    for i in range(5):
+        a, d = rng.random() * 6.28, rng.uniform(.25, .82) * r
+        x, y = d * math.cos(a), d * math.sin(a)
+        blips += (f'<path class="blip" style="animation-delay:{-i * .7:.1f}s" d="M{x - 4:.1f} {y - 4:.1f}L{x + 4:.1f} {y + 4:.1f}M{x + 4:.1f} {y - 4:.1f}L{x - 4:.1f} {y + 4:.1f}" stroke="{EMBER}" stroke-width="2"/>')
+    return (f'<g transform="translate({cx} {cy})"><circle r="{r}" fill="#090403" fill-opacity=".86" stroke="{BONE}" stroke-opacity=".75"/>'
+            f'<circle r="{r * .66:.0f}" fill="none" stroke="{BONE}" stroke-opacity=".2"/><circle r="{r * .33:.0f}" fill="none" stroke="{BONE}" stroke-opacity=".2"/>'
+            f'<path d="M{-r} 0H{r}M0 {-r}V{r}" stroke="{BONE}" stroke-opacity=".14"/>{ticks}'
+            f'<path class="sweep" d="M0 0L0 {-r}A{r} {r} 0 0 1 {r * math.sin(.75):.1f} {-r * math.cos(.75):.1f}Z" fill="url(#sweepfill)"/>{blips}'
+            f'<circle r="{r + 7}" fill="none" stroke="{EMBER}" stroke-width="1.6" stroke-dasharray="4 10" class="spin"/>'
+            f'<polygon points="0,-7 5,6 0,3 -5,6" fill="{BONE}"/></g>'
+            + text(MONO, label, cx, cy + r + 26, 13, BONE, 2, "middle"))
+
+
+RADAR_CSS = (".sweep{animation:spin 4s linear infinite}.spin{animation:spin 26s linear infinite;transform-origin:0 0}"
+             ".sweep{transform-origin:0 0}@keyframes spin{to{transform:rotate(360deg)}}"
+             ".blip{animation:blip 3.6s linear infinite}@keyframes blip{0%,100%{opacity:.1}45%{opacity:1}}")
+RADAR_DEFS = (f'<linearGradient id="sweepfill" x1="0" y1="1" x2=".8" y2="0"><stop offset="0" stop-color="{EMBER}" stop-opacity=".75"/><stop offset="1" stop-color="{EMBER}" stop-opacity="0"/></linearGradient>')
+
+
+def core(cx, cy, r, label, delay):
+    length = 2 * math.pi * r
+    return (f'<g transform="translate({cx} {cy})"><circle r="{r}" fill="#090403" fill-opacity=".8" stroke="{BONE}" stroke-opacity=".3" stroke-width="4"/>'
+            f'<circle r="{r}" fill="none" stroke="{BONE}" stroke-width="4" stroke-linecap="round" transform="rotate(-90)" stroke-dasharray="{length:.1f}" class="core" style="animation-delay:{delay}s;--l:{length:.1f}"/>'
+            f'<circle r="{r * .45:.1f}" fill="{EMBER}" class="throb" style="animation-delay:{delay}s"/></g>'
+            + text(MONO, label, cx, cy + r + 20, 11, BONE, 1.5, "middle"))
+
+
+CORE_CSS = (".core{animation:core 9s ease-in-out infinite}@keyframes core{0%{stroke-dashoffset:var(--l)}55%,92%{stroke-dashoffset:0}100%{stroke-dashoffset:var(--l)}}"
+            ".throb{animation:throb 2.2s ease-in-out infinite}@keyframes throb{0%,100%{opacity:.45}50%{opacity:1}}")
 
 
 def hero():
-    rng = random.Random(1899)
-    w, h = 1200, 430
-    body = [f'<rect width="{w}" height="{h}" fill="url(#sky)"/>',
-            '<circle cx="925" cy="285" r="130" fill="#f6b35b" opacity=".55" filter="url(#glow)"/><circle cx="925" cy="285" r="76" fill="#f7c777"/>',
-            f'<rect width="{w}" height="{h}" filter="url(#clouds)"/>', birds()]
-    body += [butte(rng, 610, 190, 118, 345, "#6d1a12"), butte(rng, 1030, 150, 86, 345, "#6d1a12"), butte(rng, 330, 110, 70, 345, "#6d1a12")]
-    body.append(ridge(rng, w, 332, 3, fill="#49110d"))
-    body += [butte(rng, 760, 118, 92, 365, "#2c0b08"), butte(rng, 1090, 170, 120, 365, "#2c0b08")]
-    body.append(ridge(rng, w, 358, 4, fill="#1c0806"))
-    body.append(telegraph(80, 150, 5, 392, 54))
-    body.append(ridge(rng, w, 392, 5))
-    body += [cactus(1150, 404, 1.15), cactus(44, 406, .9), rider(985, 396, 1.02)]
-    for i in range(14):
-        x, y, d = rng.randint(0, w), rng.randint(280, 410), rng.uniform(9, 22)
-        body.append(f'<circle class="dust" cx="{x}" cy="{y}" r="{rng.uniform(.7, 1.9):.1f}" fill="#f7d59b" style="animation-duration:{d:.0f}s;animation-delay:-{d * rng.random():.0f}s"/>')
-    body.append(text(FELL, "STUDENT  /  RV UNIVERSITY  /  BENGALURU", 68, 96, 22, BONE, tracking=4))
-    body.append(f'<g filter="url(#ink)">{text(RYE, "CHINMAY S", 72, 208, 118, BLACK)}{text(RYE, "CHINMAY S", 66, 202, 118, BONE)}</g>')
-    body.append(f'<rect x="28" y="232" width="790" height="56" fill="{BLOOD}" filter="url(#brush)"/>')
-    body.append(text(RYE, "SOFTWARE THAT ASKS FOR NO MORE THAN IT NEEDS", 70, 269, 24.5, BONE, tracking=.6))
-    style = (".flock{animation:fly 70s linear infinite}@keyframes fly{from{transform:translate(-140px,20px)}to{transform:translate(1300px,-24px)}}"
-             ".dust{animation:drift 14s ease-in-out infinite}@keyframes drift{0%,100%{opacity:0;transform:translate(0,0)}50%{opacity:.75;transform:translate(46px,-16px)}}"
-             "@media (prefers-reduced-motion:reduce){.flock,.dust{animation:none}}")
-    save("hero.svg", svg(w, h, "".join(body), "Chinmay S. Student at RV University, Bengaluru. Software that asks for no more than it needs.", style))
+    w, h = 1200, 560
+    cycle = 18
+    draw_name = lambda color: title("CHINMAY S", 52, 172, 158, color, 3)
+    slices, glitch_css, clips = glitch_copies(draw_name, 800, [(50, 22), (88, 18), (118, 26), (150, 14)], 7)
+    targets = [(250, 345, "01", "BYTEPAD"), (565, 350, "02", "ACCORD"), (825, 225, "03", "PROCTORSENSE"), (1040, 270, "04", "RVU LIBRARY")]
+    target_svg, target_css = "", ""
+    for i, (x, y, number, name) in enumerate(targets):
+        t0 = 62 + i * 5
+        target_css += (f"@keyframes t{i}{{0%,{t0}%{{opacity:0;transform:scale(2.2)}}{t0 + 1.4}%{{opacity:1;transform:scale(1)}}86%{{opacity:1;transform:scale(1)}}87%,100%{{opacity:0;transform:scale(1)}}}}"
+                       f".t{i}{{opacity:0;animation:t{i} {cycle}s linear infinite;transform-box:fill-box;transform-origin:center}}")
+        target_svg += (f'<g class="t{i}"><rect x="{x - 44}" y="{y - 44}" width="88" height="88" fill="none"/>{brackets(x - 42, y - 42, 84, 84, 16, BONE, 2.2)}'
+                       f'<path d="M{x - 13} {y - 13}L{x + 13} {y + 13}M{x + 13} {y - 13}L{x - 13} {y + 13}" stroke="#fff" stroke-width="5" stroke-linecap="round"/>'
+                       f'<rect x="{x - 42}" y="{y + 50}" width="{MONO.width(f"{number} {name}", 14, 1) + 14:.0f}" height="22" fill="#070403" fill-opacity=".85"/>'
+                       + text(MONO, f"{number} {name}", x - 35, y + 66, 14, BONE, 1) + "</g>")
+    tag = "SOFTWARE THAT ASKS FOR NO MORE THAN IT NEEDS"
+    tag_w = rocks().width(tag, 36, 1)
+    body = [f'<rect width="{w}" height="{h}" fill="{BLACK}"/>',
+            f'<g class="kb">{art("hero.webp", 0, 0, w, h)}</g>',
+            f'<rect width="{w}" height="{h}" fill="url(#shade)"/><rect width="{w}" height="{h}" fill="url(#vig)"/>',
+            '<ellipse class="fog f1" cx="300" cy="430" rx="520" ry="70" fill="url(#fog)"/><ellipse class="fog f2" cx="900" cy="400" rx="560" ry="84" fill="url(#fog)"/>',
+            f'<rect class="de" width="{w}" height="{h}" fill="#e01a1f" style="mix-blend-mode:multiply"/><rect class="de" width="{w}" height="{h}" fill="url(#vigred)"/>',
+            title("CHINMAY S", 60, 180, 158, "#000", 3, extra='opacity=".75"'),
+            title("CHINMAY S", 52, 172, 158, BONE, 3),
+            slices,
+            text(MONO, "STUDENT // RV UNIVERSITY // BENGALURU", 58, 44, 17, BONE, 3),
+            art("brush.webp", 18, 186, 830, 78),
+            f'<g clip-path="url(#type)">{title(tag, 60, 240, 36, BONE, 1)}</g>',
+            f'<rect x="60" y="210" width="4" height="34" fill="{BONE}" class="caret"><animate attributeName="x" dur="{cycle}s" repeatCount="indefinite" values="60;{60 + tag_w:.0f};{60 + tag_w:.0f};60" keyTimes="0;.14;.96;1"/></rect>',
+            target_svg,
+            f'<rect class="sweepbar" y="0" width="150" height="{h}" fill="url(#bar)"/>',
+            f'<path d="M0 {h}V488C160 474 300 496 470 482C650 468 840 494 1010 480C1090 474 1150 480 {w} 472V{h}Z" fill="{BLACK}"/>',
+            f'<g class="run r1">{rider(0, 492, 1.55, BLACK)}</g>',
+            f'<g class="run r2">{rider(0, 488, 1.1, "#160605", phase=.2)}</g>',
+            f'<g class="run r3">{rider(0, 485, .8, "#240806", phase=.4)}</g>',
+            radar(1096, 96, 62, "BENGALURU 12.97N"),
+            core(58, 520, 20, "CODE", 0), core(128, 520, 20, "COFFEE", -1.6), core(198, 520, 20, "DEAD EYE", -3.2),
+            brackets(14, 14, w - 28, h - 28, 34, BONE, 2, 'class="pulse"'),
+            scanlines(w, h, .2),
+            f'<rect class="flash" width="{w}" height="{h}" fill="#fff"/>']
+    defs = (SCANLINES + RADAR_DEFS + gallop_defs() + clips
+            + f'<clipPath id="type"><rect x="40" y="196" height="60" width="0"><animate attributeName="width" dur="{cycle}s" repeatCount="indefinite" values="0;{tag_w + 28:.0f};{tag_w + 28:.0f};0" keyTimes="0;.14;.96;1"/></rect></clipPath>'
+            + '<linearGradient id="shade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#050202" stop-opacity=".94"/><stop offset=".42" stop-color="#050202" stop-opacity=".62"/><stop offset=".62" stop-color="#050202" stop-opacity=".08"/><stop offset="1" stop-color="#050202" stop-opacity=".5"/></linearGradient>'
+            + '<radialGradient id="vig" r=".78"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".82"/></radialGradient>'
+            + '<radialGradient id="vigred" r=".75"><stop offset=".4" stop-color="#6d0006" stop-opacity="0"/><stop offset="1" stop-color="#2a0002" stop-opacity=".92"/></radialGradient>'
+            + '<radialGradient id="fog"><stop offset="0" stop-color="#e9c6a2" stop-opacity=".3"/><stop offset="1" stop-color="#e9c6a2" stop-opacity="0"/></radialGradient>'
+            + '<linearGradient id="bar"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".9" stop-color="#ff5a50" stop-opacity=".25"/><stop offset="1" stop-color="#fff" stop-opacity=".8"/></linearGradient>')
+    style = (gallop_css() + glitch_css + target_css + RADAR_CSS + CORE_CSS +
+             f".kb{{animation:kb 34s ease-in-out infinite alternate;transform-origin:62% 62%}}@keyframes kb{{from{{transform:scale(1)}}to{{transform:scale(1.09) translateX(-14px)}}}}"
+             ".fog{animation:fog 26s ease-in-out infinite alternate}.f2{animation-duration:37s;animation-direction:alternate-reverse}@keyframes fog{from{transform:translateX(-120px)}to{transform:translateX(150px)}}"
+             f".de{{opacity:0;animation:de {cycle}s linear infinite}}@keyframes de{{0%,58%{{opacity:0}}61%,86%{{opacity:.92}}89%,100%{{opacity:0}}}}"
+             f".sweepbar{{opacity:0;animation:sb {cycle}s linear infinite}}@keyframes sb{{0%,58%{{opacity:0;transform:translateX(-160px)}}59%{{opacity:1;transform:translateX(-160px)}}84%{{opacity:1;transform:translateX(1210px)}}85%,100%{{opacity:0;transform:translateX(1210px)}}}}"
+             f".flash{{opacity:0;animation:fl {cycle}s linear infinite}}@keyframes fl{{0%,86.4%{{opacity:0}}86.6%{{opacity:.72}}87.2%{{opacity:0}}87.8%{{opacity:.5}}88.4%,100%{{opacity:0}}}}"
+             ".caret{animation:bl 1s step-end infinite}@keyframes bl{50%{opacity:0}}"
+             ".pulse{animation:throb 4s ease-in-out infinite}"
+             ".run{animation:run 14s linear infinite}.r1{animation-delay:-5s}.r2{animation-delay:-5.9s}.r3{animation-delay:-6.8s}"
+             "@keyframes run{from{transform:translateX(-160px)}to{transform:translateX(1360px)}}")
+    save("hero.svg", svg(w, h, "".join(body), "Chinmay S. Student at RV University, Bengaluru. Software that asks for no more than it needs. Red and black painting of galloping riders with an animated targeting display.", style, defs))
 
 
-def chapter(numeral, title, filename):
-    w, h = 1000, 96
-    body = (f'<rect x="170" y="10" width="660" height="78" fill="{BLOOD}" filter="url(#brush)"/>'
-            + text(FELL, f"CHAPTER {numeral}", 500, 38, 15, BONE, tracking=5, anchor="middle")
-            + text(RYE, title, 500, 68, 28, BONE, tracking=1, anchor="middle"))
-    save(filename, svg(w, h, body, f"Chapter {numeral}: {title}"))
+def chapter(numeral, name, filename):
+    w, h = 1000, 128
+    draw_name = lambda color: title(name, 500, 86, 58, color, 3, "middle")
+    slices, glitch_css, clips = glitch_copies(draw_name, w, [(40, 14), (62, 12)], 6)
+    body = (art("brush.webp", 120, 12, 760, 104)
+            + f'<path class="lines" d="M116 64H20M884 64H980" stroke="{EMBER}" stroke-width="2.5"/>'
+            + f'<path class="spin1" d="M14 58L26 70M26 58L14 70" stroke="{EMBER}" stroke-width="3"/><path class="spin2" d="M974 58L986 70M986 58L974 70" stroke="{EMBER}" stroke-width="3"/>'
+            + text(MONO, f"CHAPTER {numeral}", 500, 34, 15, BONE, 6, "middle")
+            + title(name, 500, 86, 58, BONE, 3, "middle") + slices
+            + brackets(330, 18, 340, 92, 14, BONE, 2, 'class="lock"'))
+    style = (glitch_css + ".lock{animation:lock 6s ease-in-out infinite;transform-origin:500px 64px}@keyframes lock{0%,100%{transform:scale(1.2,1.3);opacity:0}20%,70%{transform:scale(1);opacity:.85}}"
+             ".lines{stroke-dasharray:8 8;animation:dash 2.5s linear infinite}@keyframes dash{to{stroke-dashoffset:-32}}"
+             ".spin1,.spin2{transform-box:fill-box;transform-origin:center;animation:sp 5s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}")
+    save(filename, svg(w, h, body, f"Chapter {numeral}: {name}", style, clips))
 
 
 def bandit():
@@ -225,142 +311,214 @@ def bandit():
             '<rect x="56" y="30" width="24" height="26"/><ellipse cx="68" cy="16" rx="24" ry="29"/>'
             '<ellipse cx="68" cy="-6" rx="62" ry="8"/><path d="M42-6C42-28 50-40 60-36C66-33 70-33 76-36C86-40 94-28 94-6Z"/></g>'
             f'<path d="M44 14C50 20 86 20 92 14C92 34 80 48 68 56C56 48 44 34 44 14Z" fill="{BLOOD}"/>'
-            f'<path d="M44 14C50 20 86 20 92 14" stroke="{PAPER}" stroke-width="1.2" fill="none" opacity=".5"/>'
-            f'<path d="M47 6h14M75 6h14" stroke="{PAPER}" stroke-width="2.4" stroke-linecap="round"/>'
+            f'<path d="M47 6h14M75 6h14" stroke="#d9c49a" stroke-width="2.4" stroke-linecap="round"/>'
             f'<rect x="42" y="-9" width="52" height="6" fill="{BLOOD}"/>')
 
 
-def nail(x, y):
-    return f'<circle cx="{x}" cy="{y}" r="5" fill="#120a06"/><circle cx="{x - 1}" cy="{y - 1}" r="2" fill="#7c6a4c"/>'
-
-
 def dossier():
-    w, h = 1000, 620
-    px, pw = 36, 368
+    w, h = 1000, 640
+    px, pw = 40, 370
     cx = px + pw / 2
-    poster = [parchment(px, 26, pw, 566),
-              text(RYE, "WANTED", cx, 110, 70, INK, anchor="middle", extra='filter="url(#ink)"'),
-              f'<path d="M{px + 26} 128H{px + pw - 26}M{px + 26} 133H{px + pw - 26}" stroke="{INK}" fill="none"/>',
-              text(FELL, "FOR SHIPPING SOFTWARE", cx, 160, 21, INK, tracking=3, anchor="middle"),
-              f'<rect x="{cx - 112}" y="178" width="224" height="178" fill="#bda373" stroke="{INK}" stroke-width="2"/>',
-              f'<g transform="translate({cx - 94} 228) scale(1.38)" filter="url(#ink)">{bandit()}</g>',
-              f'<rect x="{cx - 112}" y="356" width="224" height="16" fill="{PAPER}"/><rect x="{cx - 112}" y="178" width="224" height="178" fill="none" stroke="{INK}" stroke-width="2"/>',
-              text(RYE, "CHINMAY S", cx, 412, 42, BLOOD, anchor="middle", extra='filter="url(#ink)"'),
-              text(FELL, "Last seen in Bengaluru, at RV University", cx, 444, 19.5, INK, anchor="middle"),
-              f'<path d="M{px + 26} 462H{px + pw - 26}" stroke="{INK}" fill="none"/>',
-              text(FELL, "REWARD", cx, 490, 17, INK, tracking=5, anchor="middle"),
-              text(RYE, "A GOOD PROBLEM", cx, 526, 27, INK, anchor="middle"),
-              text(FELL, "to be delivered in working order", cx, 556, 17.5, INK, anchor="middle")]
-    jx, jw = 438, 526
-    copy = [("Bengaluru.", 0),
-            ("Studying at RV University and building software that asks for no more than it needs.", 16),
-            ("Bytepad runs your code on your own device. Accord works offline on a local model. ProctorSense catches cheating without a camera.", 16),
-            ("Always glad of a hard problem and good people to work on it with.", 16)]
-    journal = [parchment(jx, 40, jw, 540, "#e0cfa8")]
-    journal += [f'<path d="M{jx + 28} {y}H{jx + jw - 28}" stroke="#7d6443" stroke-width=".6" opacity=".45"/>' for y in range(112, 556, 36)]
-    journal_text = ""
-    y = 104
-    for string, gap in copy:
-        y += 36 if gap else 0
-        block, y = paragraph(HAND, string, jx + 36, y, 17.5, jw - 72, 36)
-        journal_text += block
-    journal.append(journal_text)
-    journal.append(text(HAND, "C.S.", jx + jw - 104, y + 26, 19, BLOOD))
-    body = (f'<rect width="{w}" height="{h}" rx="10" fill="{CHAR}" filter="url(#wood)"/>'
-            f'<g transform="rotate(-1.2 {cx} 310)">{"".join(poster)}{nail(cx, 42)}</g>'
-            f'<g transform="rotate(.7 700 310)">{"".join(journal)}{nail(jx + jw / 2, 54)}</g>')
-    save("dossier.svg", svg(w, h, body, "Wanted poster for Chinmay S, last seen in Bengaluru at RV University, beside a journal page describing the projects."))
+    poster = [art("paper-poster.webp", px, 22, pw, 590),
+              title("WANTED", cx, 118, 96, INK, 3, "middle"),
+              f'<path d="M{px + 30} 134H{px + pw - 30}M{px + 30} 139H{px + pw - 30}" stroke="{INK}" fill="none"/>',
+              text(FELL, "FOR SHIPPING SOFTWARE", cx, 166, 21, INK, 3, "middle"),
+              f'<rect x="{cx - 112}" y="182" width="224" height="178" fill="#bda373"/>',
+              f'<clipPath id="pc"><rect x="{cx - 112}" y="182" width="224" height="178"/></clipPath><g clip-path="url(#pc)"><g transform="translate({cx - 94} 232) scale(1.38)">{bandit()}</g></g>',
+              f'<rect x="{cx - 112}" y="182" width="224" height="178" fill="none" stroke="{INK}" stroke-width="2"/>',
+              f'<g class="reticle"><rect x="{cx - 112}" y="182" width="224" height="3" fill="{EMBER}"/></g>',
+              brackets(cx - 66, 196, 132, 92, 14, EMBER, 2.4, 'class="lockon"'),
+              f'<g class="match"><rect x="{cx - 66}" y="292" width="132" height="22" fill="{INK}"/>{text(MONO, "MATCH 100%", cx, 308, 15, "#ff5b4f", 1.5, "middle")}</g>',
+              title("CHINMAY S", cx, 416, 58, BLOOD, 2, "middle"),
+              text(FELL, "Last seen in Bengaluru, at RV University", cx, 448, 19.5, INK, 0, "middle"),
+              f'<path d="M{px + 30} 464H{px + pw - 30}" stroke="{INK}" fill="none"/>',
+              text(FELL, "REWARD", cx, 492, 17, INK, 5, "middle"),
+              title("A GOOD PROBLEM", cx, 534, 40, INK, 1.5, "middle"),
+              text(FELL, "to be delivered in working order", cx, 564, 17.5, INK, 0, "middle"),
+              f'<circle cx="{cx}" cy="40" r="6" fill="#120a06"/><circle cx="{cx - 1.5}" cy="38.5" r="2" fill="#b7a27a"/>']
+    jx, jw = 440, 530
+    copy = ["Bengaluru.", "", "Studying at RV University and building software that asks for no more than it needs.", "",
+            "Bytepad runs your code on your own device. Accord works offline on a local model. ProctorSense catches cheating without a camera.", "",
+            "Always glad of a hard problem and good people to work on it with."]
+    lines = []
+    for para in copy:
+        lines += [""] if not para else wrap(HAND, para, 18, jw - 84)
+    journal = [art("paper-journal.webp", jx, 34, jw, 566)]
+    journal += [f'<path d="M{jx + 34} {y}H{jx + jw - 34}" stroke="#7d6443" stroke-width=".6" opacity=".4"/>' for y in range(116, 566, 36)]
+    clip_defs, dur, t = "", 26.0, .6
+    speed = sum(HAND.width(line, 18) + 12 for line in lines if line) / 16  # px per second, so the page finishes with time to read it
+    y = 108
+    pen_values, pen_times = [], []
+    for i, line in enumerate(lines):
+        y_line = y + i * 36
+        if not line:
+            t += .25
+            continue
+        width = HAND.width(line, 18) + 12
+        span = width / speed
+        a, b = t / dur, (t + span) / dur
+        x0 = jx + 40
+        clip_defs += (f'<clipPath id="ln{i}"><rect x="{x0 - 6}" y="{y_line - 30}" height="46" width="0"><animate attributeName="width" dur="{dur}s" repeatCount="indefinite" '
+                      f'values="0;0;{width:.0f};{width:.0f};0;0" keyTimes="0;{a:.3f};{b:.3f};.95;.97;1"/></rect></clipPath>')
+        journal.append(f'<g clip-path="url(#ln{i})">{text(HAND, line, x0, y_line, 18, INK)}</g>')
+        pen_values += [f"{x0:.0f} {y_line - 2}", f"{x0 + width:.0f} {y_line - 2}"]
+        pen_times += [a, b]
+        t += span + .25
+    sign_a = t / dur
+    clip_defs += f'<clipPath id="sign"><rect x="{jx + jw - 134}" y="{y + len(lines) * 36 - 8}" height="56" width="0"><animate attributeName="width" dur="{dur}s" repeatCount="indefinite" values="0;0;100;100;0;0" keyTimes="0;{sign_a:.3f};{sign_a + .04:.3f};.95;.97;1"/></rect></clipPath>'
+    journal.append(f'<g clip-path="url(#sign)">{text(HAND, "C.S.", jx + jw - 126, y + len(lines) * 36 + 26, 19, BLOOD)}</g>')
+    pen_values = [pen_values[0]] + pen_values + [pen_values[-1], pen_values[0]]
+    key_times = ";".join(f"{v:.3f}" for v in [0] + pen_times + [.95, 1])
+    quill = (f'<g><path d="M0 0L3 -6L38 -44C46 -52 52 -50 50 -42L10 -3Z" fill="{INK}" opacity=".9"/><circle r="2.2" fill="{BLOOD}"/>'
+             f'<animateTransform attributeName="transform" type="translate" dur="{dur}s" repeatCount="indefinite" values="{";".join(pen_values)}" keyTimes="{key_times}"/></g>')
+    journal.append(quill)
+    journal.append(f'<circle cx="{jx + jw / 2}" cy="50" r="6" fill="#120a06"/><circle cx="{jx + jw / 2 - 1.5}" cy="48.5" r="2" fill="#b7a27a"/>')
+    body = (art("board.webp", 0, 0, w, h) + f'<g class="splat">{art("splatter-red.webp", 0, 0, w, h)}</g>'
+            + f'<g class="sway" style="transform-origin:{cx}px 40px">{"".join(poster)}</g>'
+            + f'<g transform="rotate(.6 700 310)">{"".join(journal)}</g>'
+            + text(MONO, "BOUNTY FILE 1899-2026", 22, h - 14, 12, BONE, 2, extra='opacity=".6"')
+            + brackets(8, 8, w - 16, h - 16, 26, BONE, 1.6, 'opacity=".55"')
+            + f'<rect class="scanrow" width="{w}" height="3" fill="#ff5b4f"/>')
+    style = (".sway{animation:sway 7s ease-in-out infinite alternate}@keyframes sway{from{transform:rotate(-1.7deg)}to{transform:rotate(.4deg)}}"
+             ".splat{animation:sp 8s ease-in-out infinite alternate}@keyframes sp{from{opacity:.55}to{opacity:1}}"
+             ".reticle{animation:ret 8s linear infinite}@keyframes ret{0%{transform:translateY(0);opacity:1}40%{transform:translateY(174px);opacity:1}41%,100%{transform:translateY(174px);opacity:0}}"
+             ".lockon{animation:lk 8s linear infinite;transform-box:fill-box;transform-origin:center}@keyframes lk{0%,40%{opacity:0;transform:scale(1.5)}46%{opacity:1;transform:scale(1)}94%{opacity:1;transform:scale(1)}96%,100%{opacity:0}}"
+             ".match{animation:mt 8s step-end infinite}@keyframes mt{0%{opacity:0}48%{opacity:1}52%{opacity:0}56%{opacity:1}95%{opacity:0}}"
+             ".scanrow{opacity:.5;animation:row 9s linear infinite}@keyframes row{from{transform:translateY(-6px)}to{transform:translateY(646px)}}")
+    save("dossier.svg", svg(w, h, body, "Animated wanted poster for Chinmay S, last seen in Bengaluru at RV University, swaying on a board, beside a journal page writing itself: studying at RV University and building software that asks for no more than it needs.", style, clip_defs))
 
 
 CARD_ICONS = {
     "terminal": '<path d="M8 12h64v56H8z"/><path d="M8 24h64"/><path d="M18 36l10 8-10 8M34 54h18"/>',
-    "scroll": '<path d="M18 10h44v54a8 8 0 0 0 8 8H26a8 8 0 0 1-8-8z"/><path d="M28 24h24M28 34h24M28 44h14"/><circle cx="48" cy="56" r="6" fill="#8e1616" stroke="#8e1616"/>',
-    "eye": '<path d="M6 40C20 18 60 18 74 40C60 62 20 62 6 40Z"/><circle cx="40" cy="40" r="10"/><path d="M14 68L66 12" stroke="#8e1616" stroke-width="4"/>',
+    "scroll": '<path d="M18 10h44v54a8 8 0 0 0 8 8H26a8 8 0 0 1-8-8z"/><path d="M28 24h24M28 34h24M28 44h14"/>',
+    "eye": '<path d="M6 40C20 18 60 18 74 40C60 62 20 62 6 40Z"/><circle cx="40" cy="40" r="10"/><path d="M14 68L66 12"/>',
     "book": '<path d="M40 22C32 14 18 14 8 16v48c10-2 24-2 32 6c8-8 22-8 32-6V16c-10-2-24-2-32 6z"/><path d="M40 22v48M16 28c6-1 12 0 16 2M16 40c6-1 12 0 16 2M48 30c4-2 10-3 16-2M48 42c4-2 10-3 16-2"/>',
 }
 
 
-def card(filename, title, tagline, blurb, tech, stamp, icon):
-    w, h = 600, 350
-    body = [parchment(14, 14, w - 28, h - 28),
-            f'<g transform="translate(40 40) scale(.95)" fill="none" stroke="{INK}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" filter="url(#ink)">{CARD_ICONS[icon]}</g>',
-            text(RYE, title, 128, 82, 40, INK, extra='filter="url(#ink)"'),
-            text(FELL, tagline, 129, 110, 22.5, BLOOD)]
-    block, _ = paragraph(FELL, blurb, 44, 162, 23.5, w - 88, 31)
-    body.append(block)
-    body.append(f'<path d="M44 280H{w - 44}" stroke="{INK}" stroke-width="1" opacity=".55"/>')
-    body.append(text(FELL, tech, 44, 311, 19, INK, tracking=.7))
-    color = BLOOD if stamp == "LIVE" else INK
-    sw = RYE.width(stamp, 24, 1.5) + 28
-    sx, sy = w - 44 - sw, 42
-    body.append(f'<g transform="rotate(5 {sx + sw / 2} {sy + 20})" filter="url(#stamp)"><rect x="{sx}" y="{sy}" width="{sw}" height="40" fill="none" stroke="{color}" stroke-width="3"/>{text(RYE, stamp, sx + sw / 2, sy + 29, 24, color, 1.5, "middle")}</g>')
-    save(filename, svg(w, h, "".join(body), f"{title}: {tagline}. {blurb} Built with {tech}."))
-
-
-def load_icons():
-    return json.loads((ROOT / "scripts" / "icons.json").read_text())
+def card(filename, name, tagline, blurb, tech, status, icon, shot, number):
+    w, h = 600, 340
+    live = status == "LIVE"
+    color = "#ff5b4f" if live else BONE
+    period, slot = 16, number * 4
+    lines = wrap(FELL, blurb, 23, 500)
+    body = [art("board-card.webp", 0, 0, w, h),
+            f'<clipPath id="cc"><rect width="{w}" height="{h}"/></clipPath><g clip-path="url(#cc)"><g class="pan">{art(shot, 150, -10, 480, 300, chr(32) + "opacity=" + chr(34) + ".92" + chr(34))}</g></g>',
+            f'<rect width="{w}" height="{h}" fill="url(#fade)"/>',
+            f'<rect class="band" width="{w}" height="46" fill="url(#bandfill)"/>',
+            f'<g transform="translate(28 26) scale(.72)" fill="none" stroke="{BONE}" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" class="iconline" pathLength="1">{CARD_ICONS[icon]}</g>',
+            title(name, 98, 76, 54, BONE, 1.2),
+            art("brush-wide.webp", 92, 90, 380, 34),
+            text(FELL, tagline, 106, 114, 20, BONE)]
+    for i, line in enumerate(lines):
+        body.append(text(FELL, line, 30, 166 + i * 30, 23, BONE))
+    body.append(f'<path d="M30 276H{w - 30}" stroke="{BONE}" stroke-opacity=".4"/>')
+    body.append(text(MONO, tech, 30, 308, 16, GOLD, .8))
+    chip_w = MONO.width(status, 15, 2) + 40
+    chip_x = w - 26 - chip_w
+    body.append(f'<rect x="{chip_x:.0f}" y="24" width="{chip_w:.0f}" height="30" fill="#070403" fill-opacity=".85" stroke="{color}"/>'
+                + (f'<circle cx="{chip_x + 15:.0f}" cy="39" r="4.6" fill="{color}" class="dot"/>' if live else f'<path d="M{chip_x + 11:.0f} 34l5 5-5 5" stroke="{color}" fill="none" stroke-width="2"/>')
+                + text(MONO, status, chip_x + 26, 44, 15, color, 2))
+    body.append(f'<g class="sel"><rect x="2" y="2" width="{w - 4}" height="{h - 4}" fill="none" stroke="{EMBER}" stroke-width="4"/>{brackets(10, 10, w - 20, h - 20, 26, BONE, 2.5)}</g>')
+    body.append(scanlines(w, h, .13))
+    body.append(f'<rect x=".75" y=".75" width="{w - 1.5}" height="{h - 1.5}" fill="none" stroke="{BONE}" stroke-opacity=".28" stroke-width="1.5"/>')
+    defs = (SCANLINES + '<linearGradient id="fade"><stop offset=".08" stop-color="#090504"/><stop offset=".62" stop-color="#090504" stop-opacity=".93"/><stop offset="1" stop-color="#090504" stop-opacity=".5"/></linearGradient>'
+            + '<linearGradient id="bandfill" x2="0" y2="1"><stop offset="0" stop-color="#ff5b4f" stop-opacity="0"/><stop offset="1" stop-color="#ff5b4f" stop-opacity=".35"/></linearGradient>')
+    style = (".pan{animation:pan 20s ease-in-out infinite alternate}@keyframes pan{from{transform:translateX(0)}to{transform:translateX(-28px) translateY(6px)}}"
+             f".sel{{opacity:0;animation:sel {period}s linear infinite;animation-delay:{slot - period}s}}@keyframes sel{{0%{{opacity:0}}1.5%,23%{{opacity:1}}25%,100%{{opacity:0}}}}"
+             f".band{{animation:band 5s linear infinite;animation-delay:-{number * 1.2}s}}@keyframes band{{from{{transform:translateY(-50px)}}to{{transform:translateY(345px)}}}}"
+             ".dot{animation:dot 1.3s ease-in-out infinite}@keyframes dot{50%{opacity:.2}}")
+    save(filename, svg(w, h, "".join(body), f"{name}: {tagline}. {blurb} Built with {tech}.", style, defs))
 
 
 def wheel():
-    icons = load_icons()
-    items = [("TypeScript", "typescript", "Bytepad"), ("Python", "python", "Accord"), ("JavaScript", "javascript", "ProctorSense, LMS"),
-             ("C", "c", "Terminal Journal"), ("Node.js", "nodedotjs", "ProctorSense, LMS"), ("FastAPI", "fastapi", "Accord"),
-             ("MySQL", "mysql", "LMS"), ("WebAssembly", "webassembly", "Bytepad"), ("Ollama", "ollama", "Accord"), ("Docker", "docker", "Accord")]
-    w, h = 1000, 600
-    cx, cy, inner, outer = 500, 300, 118, 280
-    period = len(items) * 2.4
-    body = [f'<rect width="{w}" height="{h}" rx="10" fill="{CHAR}" filter="url(#wood)"/>',
-            f'<rect width="{w}" height="{h}" rx="10" fill="{BLACK}" opacity=".72"/>',
-            f'<circle cx="{cx}" cy="{cy}" r="{outer + 12}" fill="{BLACK}" opacity=".6"/>']
+    icons = json.loads((ROOT / "scripts" / "icons.json").read_text())
+    items = [("TYPESCRIPT", "typescript", "BYTEPAD"), ("PYTHON", "python", "ACCORD"), ("JAVASCRIPT", "javascript", "PROCTORSENSE, LMS"),
+             ("C", "c", "TERMINAL JOURNAL"), ("NODE.JS", "nodedotjs", "PROCTORSENSE, LMS"), ("FASTAPI", "fastapi", "ACCORD"),
+             ("MYSQL", "mysql", "LMS"), ("WEBASSEMBLY", "webassembly", "BYTEPAD"), ("OLLAMA", "ollama", "ACCORD"), ("DOCKER", "docker", "ACCORD")]
+    w, h = 1000, 620
+    cx, cy, inner, outer = 500, 310, 118, 272
+    count, step = len(items), 2.2
+    period = count * step
+    ticks = "".join(f'<path d="M{cx} {cy - outer - 18}v{10 if i % 5 == 0 else 5}" stroke="{BONE}" stroke-opacity=".7" transform="rotate({i * 6} {cx} {cy})"/>' for i in range(60))
+    body = [art("valley-dark.webp", 0, 0, w, h), f'<rect width="{w}" height="{h}" fill="#050202" opacity=".6"/>',
+            f'<rect width="{w}" height="{h}" fill="url(#wv)"/>',
+            ticks,
+            f'<circle class="ring1" cx="{cx}" cy="{cy}" r="{outer + 28}" fill="none" stroke="{EMBER}" stroke-width="2" stroke-dasharray="3 12 40 12"/>',
+            f'<circle class="ring2" cx="{cx}" cy="{cy}" r="{outer + 37}" fill="none" stroke="{BONE}" stroke-opacity=".5" stroke-dasharray="90 26 6 26"/>',
+            f'<circle cx="{cx}" cy="{cy}" r="{outer + 9}" fill="#040202" fill-opacity=".72"/>']
     wedges, glyphs, labels = [], [], []
-    count = len(items)
     for i, (name, slug, used) in enumerate(items):
         a0, a1 = [math.radians(-90 - 18 + (i + o) * 360 / count) for o in (0, 1)]
         pad = 0.013
         p = lambda r, a: f"{cx + r * math.cos(a):.1f} {cy + r * math.sin(a):.1f}"
         d = f"M{p(inner, a0 + pad * 2)}A{inner} {inner} 0 0 1 {p(inner, a1 - pad * 2)}L{p(outer, a1 - pad)}A{outer} {outer} 0 0 0 {p(outer, a0 + pad)}Z"
-        delay = i * 2.4 - period
-        wedges.append(f'<path d="{d}" fill="#231410" stroke="{BONE}" stroke-opacity=".28"/><path class="w{" w0" if i == 0 else ""}" style="animation-delay:{delay:.1f}s" d="{d}" fill="{BLOOD}" stroke="{BONE}" stroke-width="2"/>')
+        delay = i * step - period
+        first = " w0" if i == 0 else ""
+        wedges.append(f'<path d="{d}" fill="#120b08" fill-opacity=".86" stroke="{BONE}" stroke-opacity=".3"/><path class="w{first}" style="animation-delay:{delay:.1f}s" d="{d}" fill="{BLOOD}" stroke="{BONE}" stroke-width="2.4"/>')
         mid = (a0 + a1) / 2
         ix, iy = cx + (inner + outer) / 2 * math.cos(mid), cy + (inner + outer) / 2 * math.sin(mid)
         glyphs.append(f'<path transform="translate({ix - 26:.1f} {iy - 26:.1f}) scale(2.17)" d="{icons[slug]}" fill="{BONE}"/>')
-        labels.append(f'<g class="w{" w0" if i == 0 else ""}" style="animation-delay:{delay:.1f}s">'
-                      f'{text(RYE, name, cx, cy - 2, 25 if len(name) < 11 else 21, BONE, anchor="middle")}'
-                      f'{text(FELL, "used in", cx, cy + 25, 15, GOLD, tracking=2, anchor="middle")}'
-                      f'{text(FELL, used, cx, cy + 49, 17 if len(used) < 13 else 15.5, BONE, anchor="middle")}</g>')
+        labels.append(f'<g class="w{first}" style="animation-delay:{delay:.1f}s">'
+                      f'{title(name, cx, cy - 6, 34 if len(name) < 11 else 28, BONE, 1, "middle")}'
+                      f'{text(MONO, "USED IN", cx, cy + 21, 12, GOLD, 3, "middle")}'
+                      f'{text(MONO, used, cx, cy + 43, 15 if len(used) < 13 else 12.5, BONE, .4, "middle")}'
+                      f'{text(MONO, f"{i + 1:02d}/{count}", cx, cy - 56, 12, EMBER, 2, "middle")}</g>')
     body += wedges + glyphs
-    body.append(f'<circle cx="{cx}" cy="{cy}" r="{inner - 10}" fill="{BLACK}" stroke="{GOLD}"/>')
+    needle_frames = []
+    for i in range(count + 1):
+        pct = i * 100 / count
+        needle_frames.append(f"{pct:.1f}%{{transform:rotate({i * 36}deg)}}")
+        if i < count:
+            needle_frames.append(f"{pct + 100 / count - 1.2:.1f}%{{transform:rotate({i * 36}deg)}}")
+    body.append(f'<g class="needle"><polygon points="{cx},{cy - outer - 14} {cx - 10},{cy - outer + 4} {cx + 10},{cy - outer + 4}" fill="{BONE}"/></g>')
+    body.append(f'<circle cx="{cx}" cy="{cy}" r="{inner - 8}" fill="#060302" stroke="{GOLD}"/><circle class="ring3" cx="{cx}" cy="{cy}" r="{inner - 16}" fill="none" stroke="{EMBER}" stroke-dasharray="2 9"/>')
     body += labels
-    columns = [(42, "LANGUAGES", ["TypeScript", "Python", "JavaScript", "C", "HTML & CSS"]),
-               (w - 42, "BUILT WITH", ["Node.js & Express", "FastAPI", "MySQL & SQLite", "WebAssembly", "Ollama", "Docker"])]
+    columns = [(38, "LANGUAGES", ["TypeScript", "Python", "JavaScript", "C", "HTML & CSS"]),
+               (w - 38, "BUILT WITH", ["Node.js & Express", "FastAPI", "MySQL & SQLite", "WebAssembly", "Ollama", "Docker"])]
     for x, heading, entries in columns:
         anchor = "start" if x < cx else "end"
-        body.append(text(FELL, heading, x, 214, 15, GOLD, tracking=3, anchor=anchor))
+        body.append(title(heading, x, 222, 28, EMBER, 1.2, anchor))
         for i, entry in enumerate(entries):
-            body.append(text(FELL, entry, x, 248 + i * 31, 21, BONE, anchor=anchor))
-    style = (".w{opacity:0;animation:pick %.1fs step-end infinite}@keyframes pick{0%%{opacity:1}%.2f%%{opacity:0}100%%{opacity:0}}"
-             "@media (prefers-reduced-motion:reduce){.w{animation:none}.w0{opacity:1}}") % (period, 100 / count)
-    label = "Tool wheel: " + "; ".join(f"{n}, used in {u}" for n, _, u in items) + "."
-    save("wheel.svg", svg(w, h, "".join(body), label, style))
+            body.append(text(FELL, entry, x, 258 + i * 31, 21, BONE, 0, anchor))
+    body.append(scanlines(w, h, .14))
+    body.append(brackets(10, 10, w - 20, h - 20, 30, BONE, 1.8))
+    body.append(text(MONO, "WEAPON WHEEL // TOOLS IN ACTUAL USE", 24, h - 22, 13, BONE, 2))
+    defs = SCANLINES + '<radialGradient id="wv" r=".75"><stop offset=".5" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".85"/></radialGradient>'
+    style = (f".w{{opacity:0;animation:pick {period:.1f}s step-end infinite}}@keyframes pick{{0%{{opacity:1}}{100 / count:.2f}%{{opacity:0}}100%{{opacity:0}}}}"
+             f".needle{{transform-origin:{cx}px {cy}px;animation:needle {period:.1f}s cubic-bezier(.7,0,.2,1) infinite}}@keyframes needle{{{''.join(needle_frames)}}}"
+             f".ring1,.ring2,.ring3{{transform-origin:{cx}px {cy}px}}.ring1{{animation:rt 28s linear infinite}}.ring2{{animation:rt 44s linear infinite reverse}}.ring3{{animation:rt 12s linear infinite}}"
+             "@keyframes rt{to{transform:rotate(360deg)}}")
+    label = "Animated weapon wheel of tools: " + "; ".join(f"{n}, used in {u}" for n, _, u in items) + "."
+    save("wheel.svg", svg(w, h, "".join(body), label, style, defs))
 
 
 def button(filename, label):
-    width = RYE.width(label, 19, 1.2) + 52
-    w, h = round(width), 54
-    body = (f'<rect x="1" y="1" width="{w - 2}" height="{h - 2}" rx="3" fill="{CHAR}" stroke="{GOLD}" stroke-width="2"/>'
-            f'<rect x="6" y="6" width="{w - 12}" height="{h - 12}" rx="1" fill="{BLOOD}"/>'
-            + text(RYE, label, w / 2, 34, 19, BONE, 1.2, "middle"))
-    save(filename, svg(w, h, body, label))
+    width = rocks().width(label, 30, 1.2) + 56
+    w, h = round(width), 62
+    body = (f'<rect x="1" y="1" width="{w - 2}" height="{h - 2}" fill="{BLACK}" stroke="{BONE}" stroke-opacity=".75" stroke-width="2"/>'
+            f'<rect x="7" y="7" width="{w - 14}" height="{h - 14}" fill="{BLOOD}"/>'
+            + title(label, w / 2, 42, 30, BONE, 1.2, "middle")
+            + f'<clipPath id="b"><rect x="7" y="7" width="{w - 14}" height="{h - 14}"/></clipPath><g clip-path="url(#b)"><polygon class="shine" points="0,0 34,0 14,{h} -20,{h}" fill="#fff" opacity=".38"/></g>')
+    style = f".shine{{animation:sh 4.5s ease-in-out infinite}}@keyframes sh{{0%,60%{{transform:translateX(-40px)}}85%,100%{{transform:translateX({w + 40}px)}}}}"
+    save(filename, svg(w, h, body, label, style))
 
 
 def footer():
-    rng = random.Random(1911)
-    w, h = 1200, 250
-    body = [f'<rect width="{w}" height="{h}" fill="url(#sky)"/>', '<circle cx="250" cy="178" r="104" fill="#f6b35b" opacity=".5" filter="url(#glow)"/><circle cx="250" cy="178" r="58" fill="#f7c777"/>',
-            f'<rect width="{w}" height="{h}" filter="url(#clouds)"/>', butte(rng, 40, 170, 80, 205, "#49110d"), butte(rng, 900, 200, 96, 205, "#49110d"),
-            ridge(rng, w, 200, 3, fill="#1c0806"), ridge(rng, w, 222, 4), rider(610, 226, .62), cactus(90, 234, .8), cactus(1120, 236, 1),
-            text(RYE, "Thanks for stopping by.", 600, 96, 42, BONE, anchor="middle", extra='filter="url(#ink)"')]
-    save("footer.svg", svg(w, h, "".join(body), "Thanks for stopping by."))
+    w, h = 1200, 330
+    slices, glitch_css, clips = glitch_copies(lambda c: title("THANKS FOR STOPPING BY", 600, 128, 74, c, 2, "middle"), w, [(70, 16), (100, 14)], 8)
+    body = [f'<rect width="{w}" height="{h}" fill="{BLACK}"/><g class="kb">{art("valley.webp", 0, -70, w, 584)}</g>',
+            f'<rect width="{w}" height="{h}" fill="url(#fs)"/>',
+            title("THANKS FOR STOPPING BY", 600, 128, 74, BONE, 2, "middle"), slices,
+            text(MONO, "END OF LINE // THE TRAIL CONTINUES", 600, 164, 16, BONE, 4, "middle", 'class="blink"'),
+            f'<path d="M0 {h}V286C200 270 420 292 640 278C860 266 1020 286 {w} 272V{h}Z" fill="{BLACK}"/>',
+            f'<g class="run">{rider(0, 280, .85, BLACK)}</g>', f'<g class="run r2">{rider(0, 278, .6, "#160605", phase=.3)}</g>',
+            scanlines(w, h, .2), brackets(12, 12, w - 24, h - 24, 28, BONE, 1.8)]
+    defs = (SCANLINES + gallop_defs() + clips + '<linearGradient id="fs" x2="0" y2="1"><stop offset="0" stop-color="#050202" stop-opacity=".86"/><stop offset=".52" stop-color="#050202" stop-opacity=".72"/><stop offset=".8" stop-color="#050202" stop-opacity="0"/></linearGradient>')
+    style = (gallop_css() + glitch_css + ".kb{animation:kb 30s ease-in-out infinite alternate;transform-origin:50% 50%}@keyframes kb{from{transform:scale(1)}to{transform:scale(1.08)}}"
+             ".blink{animation:bk 2.4s step-end infinite}@keyframes bk{70%{opacity:.25}}"
+             ".run{animation:run 12s linear infinite}.r2{animation-delay:-1.4s}@keyframes run{from{transform:translateX(-160px)}to{transform:translateX(1360px)}}")
+    save("footer.svg", svg(w, h, "".join(body), "Thanks for stopping by. Riders gallop across a red mountain valley.", style, defs))
 
 
 def fetch_activity():
@@ -385,15 +543,16 @@ def trail():
     calendar = collection["contributionCalendar"]
     w, h = 1000, 520
     x0, y0, cw, ch = 60, 134, 16.5, 21
-    body = [parchment(14, 14, w - 28, h - 28)]
+    cycle = 18
+    body = [art("paper-map.webp", 0, 0, w, h)]
     for r in (40, 62, 84):
-        body.append(f'<ellipse cx="700" cy="205" rx="{r * 2.9}" ry="{r}" fill="none" stroke="#7d6443" stroke-width=".8" opacity=".32" filter="url(#ink)"/>')
-    body.append(text(RYE, "THE PAST YEAR, ON THE MAP", 60, 76, 30, INK, extra='filter="url(#ink)"'))
-    compass = (f'<g transform="translate(910 68)" fill="none" stroke="{INK}"><circle r="27"/><circle r="22" stroke-width=".6"/>'
-               f'<polygon points="0,-34 5,-5 0,0" fill="{BLOOD}" stroke="none"/><polygon points="0,-34 -5,-5 0,0" fill="{INK}" stroke="none"/>'
-               f'<polygon points="0,34 5,5 0,0" fill="{INK}" stroke="none"/><polygon points="0,34 -5,5 0,0" fill="{BLOOD}" stroke="none"/>'
-               f'<path d="M-27 0H27" stroke-width=".9"/></g>')
-    body.append(compass)
+        body.append(f'<ellipse cx="700" cy="205" rx="{r * 2.9}" ry="{r}" fill="none" stroke="#7d6443" opacity=".3"/>')
+    body.append(text(RYE, "THE PAST YEAR, ON THE MAP", 60, 76, 30, INK))
+    ticks = "".join(f'<path d="M0 -27V-22" stroke="{INK}" transform="rotate({i * 30})"/>' for i in range(12))
+    body.append(f'<g transform="translate(910 68)"><circle r="27" fill="#d3bd90" fill-opacity=".5" stroke="{INK}"/>{ticks}'
+                f'<path class="sweep" d="M0 0L0 -27A27 27 0 0 1 19 -19Z" fill="{BLOOD}" opacity=".6"/>'
+                f'<polygon points="0,-34 5,-5 0,0" fill="{BLOOD}"/><polygon points="0,-34 -5,-5 0,0" fill="{INK}"/>'
+                f'<polygon points="0,34 5,5 0,0" fill="{INK}"/><polygon points="0,34 -5,5 0,0" fill="{BLOOD}"/></g>')
     stops, last_month, last_label = [], None, -9
     dots = []
     for wx, week in enumerate(calendar["weeks"]):
@@ -404,28 +563,38 @@ def trail():
             if day["weekday"] == 0 and month != last_month:
                 last_month = month
                 if wx - last_label >= 3 and wx < len(calendar["weeks"]) - 1:
-                    body.append(text(FELL, date.fromisoformat(day["date"]).strftime("%b").upper(), x, y0 - 18, 14, INK, tracking=1.5))
+                    body.append(text(FELL, date.fromisoformat(day["date"]).strftime("%b").upper(), x, y0 - 18, 14, INK, 1.5))
                     last_label = wx
             if count:
-                size = min(4.2 + count * .55, 8.4)
-                stops.append((x, y))
-                dots.append(f'<path d="M{x - size:.1f} {y - size:.1f}L{x + size:.1f} {y + size:.1f}M{x + size:.1f} {y - size:.1f}L{x - size:.1f} {y + size:.1f}" stroke="{BLOOD}" stroke-width="{2.4 + min(count, 8) * .17:.1f}" stroke-linecap="round"/>')
+                stops.append((x, y, count))
             else:
                 dots.append(f'<circle cx="{x}" cy="{y}" r="1.5" fill="{INK}" opacity=".36"/>')
-    route = ""
-    if stops:
-        route = "M" + "L".join(f"{x:.1f} {y:.1f}" for x, y in stops)
-        body.append(f'<path d="{route}" fill="none" stroke="{BLOOD}" stroke-width="1.9" stroke-dasharray="7 6" opacity=".75"/>')
     body += dots
+    defs, route_css = "", ""
     if stops:
-        body.append(f'<g>{rider(-22, 1, .3, INK)}<animateMotion dur="{max(18, len(stops) * 1.4):.0f}s" repeatCount="indefinite" path="{route}"/></g>')
+        route = "M" + "L".join(f"{x:.1f} {y:.1f}" for x, y, _ in stops)
+        lengths = [0.0]
+        for (ax, ay, _), (bx, by, _) in zip(stops, stops[1:]):
+            lengths.append(lengths[-1] + math.hypot(bx - ax, by - ay))
+        total = lengths[-1] or 1
+        defs = f'<mask id="reveal" maskUnits="userSpaceOnUse" x="0" y="0" width="{w}" height="{h}"><path class="draw" d="{route}" pathLength="1" fill="none" stroke="#fff" stroke-width="9"/></mask>'
+        body.append(f'<path d="{route}" fill="none" stroke="{BLOOD}" stroke-width="2.2" stroke-dasharray="7 6" mask="url(#reveal)"/>')
+        travel = .78
+        for (x, y, count), length in zip(stops, lengths):
+            size = min(4.4 + count * .55, 8.6)
+            at = length / total * travel * cycle
+            body.append(f'<path class="pop x" style="animation-delay:{at:.2f}s" d="M{x - size:.1f} {y - size:.1f}L{x + size:.1f} {y + size:.1f}M{x + size:.1f} {y - size:.1f}L{x - size:.1f} {y + size:.1f}" stroke="{BLOOD}" stroke-width="{2.5 + min(count, 8) * .17:.1f}" stroke-linecap="round"/>')
+        body.append(f'<g>{rider(0, 2, .36, INK, period=.5)}<animateMotion dur="{cycle}s" repeatCount="indefinite" path="{route}" calcMode="linear" keyPoints="0;1;1" keyTimes="0;{travel};1"/></g>')
+        route_css = (f".draw{{stroke-dasharray:1;animation:dr {cycle}s linear infinite}}@keyframes dr{{0%{{stroke-dashoffset:1}}{travel * 100:.0f}%,100%{{stroke-dashoffset:0}}}}"
+                     f".x{{opacity:0;animation:xp {cycle}s linear infinite both}}@keyframes xp{{0%{{opacity:0;transform:scale(2.6)}}1.4%{{opacity:1;transform:scale(1)}}96%{{opacity:1;transform:scale(1)}}100%{{opacity:0;transform:scale(1)}}}}")
+    body.append(f'<rect class="scanrow" x="50" y="{y0 - 8}" width="{w - 100}" height="2" fill="{BLOOD}" opacity=".4"/>')
     body.append(f'<path d="M60 304H{w - 60}" stroke="{INK}" opacity=".55"/>')
     numbers = [(calendar["totalContributions"], "CONTRIBUTIONS"), (collection["totalCommitContributions"], "COMMITS"),
                (collection["totalPullRequestContributions"], "PULL REQUESTS"), (data["repositories"]["totalCount"], "PUBLIC REPOS")]
     for i, (value, caption) in enumerate(numbers):
         x = 60 + i * 220
-        body.append(text(RYE, str(value), x, 358, 40, BLOOD, extra='filter="url(#ink)"'))
-        body.append(text(FELL, caption, x, 382, 14.5, INK, tracking=2))
+        body.append(text(RYE, str(value), x, 358, 40, BLOOD))
+        body.append(text(MONO, caption, x, 382, 14, INK, 2))
     totals = {}
     for repo in data["repositories"]["nodes"]:
         if repo["isFork"] or repo["name"] in SKIP_LANGUAGE_REPOS:
@@ -444,7 +613,7 @@ def trail():
     legend_x = 60.0
     for i, (name, value) in enumerate(top):
         span = bar_width * value / grand
-        body.append(f'<rect x="{x:.1f}" y="410" width="{max(span - 2, 1):.1f}" height="18" fill="{inks[i]}"/>')
+        body.append(f'<rect class="bar" style="transform-origin:{x:.0f}px 419px;animation-delay:{i * .12:.2f}s" x="{x:.1f}" y="410" width="{max(span - 2, 1):.1f}" height="18" fill="{inks[i]}"/>')
         x += span
         label = f"{name} {100 * value / grand:.0f}%"
         body.append(f'<rect x="{legend_x:.1f}" y="446" width="12" height="12" fill="{inks[i]}"/>')
@@ -452,7 +621,11 @@ def trail():
         legend_x += FELL.width(label, 16.5) + 44
     label = (f'{calendar["totalContributions"]} contributions in the past year, including {collection["totalCommitContributions"]} commits and '
              f'{collection["totalPullRequestContributions"]} pull requests, across {data["repositories"]["totalCount"]} public repositories.')
-    save("trail.svg", svg(w, h, "".join(body), label))
+    style = (gallop_css(.5) + route_css +
+             ".sweep{transform-origin:0 0;animation:spin 3s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}"
+             ".scanrow{animation:row 6s ease-in-out infinite alternate}@keyframes row{from{transform:translateY(0)}to{transform:translateY(142px)}}"
+             f".bar{{animation:bar {cycle}s cubic-bezier(.2,.7,.2,1) infinite both}}@keyframes bar{{0%{{transform:scaleX(0)}}7%,96%{{transform:scaleX(1)}}100%{{transform:scaleX(0)}}}}")
+    save("trail.svg", svg(w, h, "".join(body), label, style, gallop_defs(INK) + defs))
 
 
 def static_art():
@@ -460,20 +633,20 @@ def static_art():
     footer()
     dossier()
     wheel()
-    for numeral, title, filename in [("I", "THE OUTLAW", "ch1.svg"), ("II", "THE WORK", "ch2.svg"), ("III", "THE TOOLS", "ch3.svg"), ("IV", "THE TRAIL", "ch4.svg")]:
-        chapter(numeral, title, filename)
-    card("bytepad.svg", "Bytepad", "A compiler inside your browser",
+    for numeral, name, filename in [("I", "THE OUTLAW", "ch1.svg"), ("II", "THE WORK", "ch2.svg"), ("III", "THE TOOLS", "ch3.svg"), ("IV", "THE TRAIL", "ch4.svg")]:
+        chapter(numeral, name, filename)
+    card("bytepad.svg", "BYTEPAD", "A compiler inside your browser",
          "Runs Python, C, C++, JavaScript and TypeScript on your own device. Programs really stop and wait for input. No signup, no server.",
-         "TypeScript  /  WebAssembly  /  Monaco", "LIVE", "terminal")
-    card("accord.svg", "Accord", "From handshake to contract",
+         "TYPESCRIPT / WEBASSEMBLY / MONACO", "LIVE", "terminal", "shot-bytepad.webp", 0)
+    card("accord.svg", "ACCORD", "From handshake to contract",
          "Turns informal WhatsApp deals into plain agreements both sides confirm, with a tamper-evident trail. Runs offline on a local LLM.",
-         "Python  /  FastAPI  /  SQLite  /  Ollama", "LIVE", "scroll")
-    card("proctorsense.svg", "ProctorSense", "Security without surveillance",
+         "PYTHON / FASTAPI / SQLITE / OLLAMA", "LIVE", "scroll", "shot-accord.webp", 1)
+    card("proctorsense.svg", "PROCTORSENSE", "Security without surveillance",
          "Flags exam cheating from behaviour: typing speed, paste bursts, tab switches and honeypot text. No webcam, no screen recording.",
-         "Node.js  /  Express  /  JavaScript", "LIVE", "eye")
-    card("lms.svg", "RVU Library", "Management system for staff",
+         "NODE.JS / EXPRESS / JAVASCRIPT", "LIVE", "eye", "shot-proctorsense.webp", 2)
+    card("lms.svg", "RVU LIBRARY", "Management system for staff",
          "Admin portal for the catalogue, students, book issues and returns, with automatic overdue fines and session-based login.",
-         "Node.js  /  Express  /  MySQL  /  EJS", "SOURCE", "book")
+         "NODE.JS / EXPRESS / MYSQL / EJS", "SOURCE", "book", "shot-lms.webp", 3)
     for filename, label in [("btn-linkedin.svg", "LINKEDIN"), ("btn-bytepad.svg", "TRY BYTEPAD"), ("btn-accord.svg", "TRY ACCORD"), ("btn-repos.svg", "ALL REPOSITORIES")]:
         button(filename, label)
 
