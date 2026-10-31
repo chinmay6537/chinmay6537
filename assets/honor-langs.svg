@@ -1,0 +1,235 @@
+
+      <svg
+        width="350"
+        height="215"
+        viewBox="0 0 350 215"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        role="img"
+        aria-labelledby="descId"
+      >
+        <title id="titleId"></title>
+        <desc id="descId"></desc>
+        <style>
+          .header {
+            font: 600 18px 'Segoe UI', Ubuntu, Sans-Serif;
+            fill: #E8E2D4;
+            animation: fadeInAnimation 0.8s ease-in-out forwards;
+          }
+          @supports(-moz-appearance: auto) {
+            /* Selector detects Firefox */
+            .header { font-size: 15.5px; }
+          }
+          
+    @keyframes slideInAnimation {
+      from {
+        width: 0;
+      }
+      to {
+        width: calc(100%-100px);
+      }
+    }
+    @keyframes growWidthAnimation {
+      from {
+        width: 0;
+      }
+      to {
+        width: 100%;
+      }
+    }
+    .stat {
+      font: 600 14px 'Segoe UI', Ubuntu, "Helvetica Neue", Sans-Serif; fill: #8C857A;
+    }
+    @supports(-moz-appearance: auto) {
+      /* Selector detects Firefox */
+      .stat { font-size:12px; }
+    }
+    .bold { font-weight: 700 }
+    .lang-name {
+      font: 400 11px "Segoe UI", Ubuntu, Sans-Serif;
+      fill: #8C857A;
+    }
+    .stagger {
+      opacity: 0;
+      animation: fadeInAnimation 0.3s ease-in-out forwards;
+    }
+    #rect-mask rect{
+      animation: slideInAnimation 1s ease-in-out forwards;
+    }
+    .lang-progress{
+      animation: growWidthAnimation 0.6s ease-in-out forwards;
+    }
+    .progress-background { fill: #ddd; }
+    
+          
+
+          
+      /* Animations */
+      @keyframes scaleInAnimation {
+        from {
+          transform: translate(-5px, 5px) scale(0);
+        }
+        to {
+          transform: translate(-5px, 5px) scale(1);
+        }
+      }
+      @keyframes fadeInAnimation {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+    
+          
+        </style>
+
+        
+        <defs>
+          
+          
+        </defs>
+        
+
+        <rect
+          data-testid="card-bg"
+          class="card-bg"
+          x="0.5"
+          y="0.5"
+          rx="10"
+          height="99%"
+          stroke="#2A2724"
+          width="349"
+          fill="#0B0B0A"
+          stroke-opacity="1"
+        />
+
+        
+      <g
+        data-testid="card-title"
+        transform="translate(25, 35)"
+      >
+        <g transform="translate(0, 0)">
+      <text
+        x="0"
+        y="0"
+        class="header"
+        data-testid="header"
+      >Languages</text>
+    </g>
+      </g>
+    
+
+        <g
+          data-testid="main-card-body"
+          transform="translate(0, 55)"
+        >
+          
+    <svg data-testid="lang-items" x="25">
+      
+    <g transform="translate(0, 0)">
+      <g transform="translate(0, 0)">
+        <g transform="translate(0, 0)">
+    <g class="stagger" style="animation-delay: 450ms">
+      <circle cx="5" cy="6" r="5" fill="#B3261E" />
+      <text data-testid="lang-name" x="15" y="10" class='lang-name'>
+        Python 37.51%
+      </text>
+    </g>
+  </g><g transform="translate(0, 32)">
+    <g class="stagger" style="animation-delay: 600ms">
+      <circle cx="5" cy="6" r="5" fill="#E8E2D4" />
+      <text data-testid="lang-name" x="15" y="10" class='lang-name'>
+        TypeScript 27.10%
+      </text>
+    </g>
+  </g><g transform="translate(0, 64)">
+    <g class="stagger" style="animation-delay: 750ms">
+      <circle cx="5" cy="6" r="5" fill="#C9A86A" />
+      <text data-testid="lang-name" x="15" y="10" class='lang-name'>
+        JavaScript 18.14%
+      </text>
+    </g>
+  </g><g transform="translate(0, 96)">
+    <g class="stagger" style="animation-delay: 900ms">
+      <circle cx="5" cy="6" r="5" fill="#8C857A" />
+      <text data-testid="lang-name" x="15" y="10" class='lang-name'>
+        EJS 10.12%
+      </text>
+    </g>
+  </g><g transform="translate(0, 128)">
+    <g class="stagger" style="animation-delay: 1050ms">
+      <circle cx="5" cy="6" r="5" fill="#2A2724" />
+      <text data-testid="lang-name" x="15" y="10" class='lang-name'>
+        HTML 7.13%
+      </text>
+    </g>
+  </g>
+      </g>
+
+      <g transform="translate(125, -45)">
+        <svg width="350" height="350">
+       <g class="stagger" style="animation-delay: 600ms">
+        <path
+          data-testid="lang-donut"
+          size="37.51"
+          d="M 156.71086668953217 156.76121935951824 A 56.66666666666667 56.66666666666667 0 0 0 116.66666666666667 60"
+          stroke="#B3261E"
+          fill="none"
+          stroke-width="12">
+        </path>
+      </g>
+      
+       <g class="stagger" style="animation-delay: 700ms">
+        <path
+          data-testid="lang-donut"
+          size="27.1"
+          d="M 71.65224110655302 151.0877736012802 A 56.66666666666667 56.66666666666667 0 0 0 156.71086668953217 156.76121935951824"
+          stroke="#E8E2D4"
+          fill="none"
+          stroke-width="12">
+        </path>
+      </g>
+      
+       <g class="stagger" style="animation-delay: 800ms">
+        <path
+          data-testid="lang-donut"
+          size="18.14"
+          d="M 66.58661429497403 90.15064385856755 A 56.66666666666667 56.66666666666667 0 0 0 71.65224110655302 151.0877736012802"
+          stroke="#C9A86A"
+          fill="none"
+          stroke-width="12">
+        </path>
+      </g>
+      
+       <g class="stagger" style="animation-delay: 900ms">
+        <path
+          data-testid="lang-donut"
+          size="10.12"
+          d="M 92.12117356420387 65.59191870382242 A 56.66666666666667 56.66666666666667 0 0 0 66.58661429497403 90.15064385856755"
+          stroke="#8C857A"
+          fill="none"
+          stroke-width="12">
+        </path>
+      </g>
+      
+       <g class="stagger" style="animation-delay: 1000ms">
+        <path
+          data-testid="lang-donut"
+          size="7.13"
+          d="M 116.66666666666666 60 A 56.66666666666667 56.66666666666667 0 0 0 92.12117356420387 65.59191870382242"
+          stroke="#2A2724"
+          fill="none"
+          stroke-width="12">
+        </path>
+      </g>
+      </svg>
+      </g>
+    </g>
+  
+    </svg>
+  
+        </g>
+      </svg>
+    
