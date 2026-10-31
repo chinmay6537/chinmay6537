@@ -235,7 +235,7 @@ def hero():
     cycle = 18
     draw_name = lambda color: title("CHINMAY S", 52, 172, 158, color, 3)
     slices, glitch_css, clips = glitch_copies(draw_name, 800, [(50, 22), (88, 18), (118, 26), (150, 14)], 7)
-    targets = [(250, 345, "01", "BYTEPAD"), (565, 350, "02", "ACCORD"), (825, 225, "03", "PROCTORSENSE"), (1040, 270, "04", "RVU LIBRARY")]
+    targets = [(210, 330, "01", "BYTEPAD"), (564, 340, "02", "ACCORD"), (940, 96, "03", "PROCTORSENSE"), (1110, 226, "04", "RVU LIBRARY")]
     target_svg, target_css = "", ""
     for i, (x, y, number, name) in enumerate(targets):
         t0 = 62 + i * 5
@@ -248,7 +248,7 @@ def hero():
     tag = "SOFTWARE THAT ASKS FOR NO MORE THAN IT NEEDS"
     tag_w = rocks().width(tag, 36, 1)
     body = [f'<rect width="{w}" height="{h}" fill="{BLACK}"/>',
-            f'<g class="kb">{art("hero.webp", 0, 0, w, h)}</g>',
+            f'<g class="kb"><g class="sl s1">{art("hero-arthur.webp", 0, 0, w, h)}</g><g class="sl s2">{art("hero-riders.webp", 0, 0, w, h)}</g><g class="sl s3">{art("hero-gang.webp", 0, 0, w, h)}</g></g>',
             f'<rect width="{w}" height="{h}" fill="url(#shade)"/><rect width="{w}" height="{h}" fill="url(#vig)"/>',
             '<ellipse class="fog f1" cx="300" cy="430" rx="520" ry="70" fill="url(#fog)"/><ellipse class="fog f2" cx="900" cy="400" rx="560" ry="84" fill="url(#fog)"/>',
             f'<rect class="de" width="{w}" height="{h}" fill="#e01a1f" style="mix-blend-mode:multiply"/><rect class="de" width="{w}" height="{h}" fill="url(#vigred)"/>',
@@ -265,19 +265,22 @@ def hero():
             f'<g class="run r1">{rider(0, 492, 1.55, BLACK)}</g>',
             f'<g class="run r2">{rider(0, 488, 1.1, "#160605", phase=.2)}</g>',
             f'<g class="run r3">{rider(0, 485, .8, "#240806", phase=.4)}</g>',
-            radar(1096, 96, 62, "BENGALURU 12.97N"),
+            radar(1104, 432, 62, "BENGALURU 12.97N"),
             core(58, 520, 20, "CODE", 0), core(128, 520, 20, "COFFEE", -1.6), core(198, 520, 20, "DEAD EYE", -3.2),
             brackets(14, 14, w - 28, h - 28, 34, BONE, 2, 'class="pulse"'),
             scanlines(w, h, .2),
             f'<rect class="flash" width="{w}" height="{h}" fill="#fff"/>']
     defs = (SCANLINES + RADAR_DEFS + gallop_defs() + clips
             + f'<clipPath id="type"><rect x="40" y="196" height="60" width="0"><animate attributeName="width" dur="{cycle}s" repeatCount="indefinite" values="0;{tag_w + 28:.0f};{tag_w + 28:.0f};0" keyTimes="0;.14;.96;1"/></rect></clipPath>'
-            + '<linearGradient id="shade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#050202" stop-opacity=".94"/><stop offset=".42" stop-color="#050202" stop-opacity=".62"/><stop offset=".62" stop-color="#050202" stop-opacity=".08"/><stop offset="1" stop-color="#050202" stop-opacity=".5"/></linearGradient>'
-            + '<radialGradient id="vig" r=".78"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".82"/></radialGradient>'
+            + '<linearGradient id="shade"><stop offset="0" stop-color="#050202" stop-opacity=".9"/><stop offset=".5" stop-color="#050202" stop-opacity=".62"/><stop offset=".74" stop-color="#050202" stop-opacity="0"/></linearGradient>'
+            + '<radialGradient id="vig" r=".85"><stop offset=".6" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".6"/></radialGradient>'
             + '<radialGradient id="vigred" r=".75"><stop offset=".4" stop-color="#6d0006" stop-opacity="0"/><stop offset="1" stop-color="#2a0002" stop-opacity=".92"/></radialGradient>'
             + '<radialGradient id="fog"><stop offset="0" stop-color="#e9c6a2" stop-opacity=".3"/><stop offset="1" stop-color="#e9c6a2" stop-opacity="0"/></radialGradient>'
             + '<linearGradient id="bar"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".9" stop-color="#ff5a50" stop-opacity=".25"/><stop offset="1" stop-color="#fff" stop-opacity=".8"/></linearGradient>')
     style = (gallop_css() + glitch_css + target_css + RADAR_CSS + CORE_CSS +
+             f".sl{{opacity:0}}.s1{{animation:s1 {cycle}s linear infinite}}@keyframes s1{{0%,26%{{opacity:1}}30%,96%{{opacity:0}}100%{{opacity:1}}}}"
+             f".s2{{animation:s2 {cycle}s linear infinite}}@keyframes s2{{0%,26%{{opacity:0}}30%,52%{{opacity:1}}56%,100%{{opacity:0}}}}"
+             f".s3{{animation:s3 {cycle}s linear infinite}}@keyframes s3{{0%,52%{{opacity:0}}56%,96%{{opacity:1}}100%{{opacity:0}}}}"
              f".kb{{animation:kb 34s ease-in-out infinite alternate;transform-origin:62% 62%}}@keyframes kb{{from{{transform:scale(1)}}to{{transform:scale(1.09) translateX(-14px)}}}}"
              ".fog{animation:fog 26s ease-in-out infinite alternate}.f2{animation-duration:37s;animation-direction:alternate-reverse}@keyframes fog{from{transform:translateX(-120px)}to{transform:translateX(150px)}}"
              f".de{{opacity:0;animation:de {cycle}s linear infinite}}@keyframes de{{0%,58%{{opacity:0}}61%,86%{{opacity:.92}}89%,100%{{opacity:0}}}}"
@@ -287,7 +290,7 @@ def hero():
              ".pulse{animation:throb 4s ease-in-out infinite}"
              ".run{animation:run 14s linear infinite}.r1{animation-delay:-5s}.r2{animation-delay:-5.9s}.r3{animation-delay:-6.8s}"
              "@keyframes run{from{transform:translateX(-160px)}to{transform:translateX(1360px)}}")
-    save("hero.svg", svg(w, h, "".join(body), "Chinmay S. Student at RV University, Bengaluru. Software that asks for no more than it needs. Red and black painting of galloping riders with an animated targeting display.", style, defs))
+    save("hero.svg", svg(w, h, "".join(body), "Chinmay S. Student at RV University, Bengaluru. Software that asks for no more than it needs. Official Red Dead Redemption 2 scenes crossfade behind an animated targeting display.", style, defs))
 
 
 def chapter(numeral, name, filename):
@@ -441,7 +444,7 @@ def wheel():
     count, step = len(items), 2.2
     period = count * step
     ticks = "".join(f'<path d="M{cx} {cy - outer - 18}v{10 if i % 5 == 0 else 5}" stroke="{BONE}" stroke-opacity=".7" transform="rotate({i * 6} {cx} {cy})"/>' for i in range(60))
-    body = [art("valley-dark.webp", 0, 0, w, h), f'<rect width="{w}" height="{h}" fill="#050202" opacity=".6"/>',
+    body = [art("gunmen.webp", 0, 0, w, h), f'<rect width="{w}" height="{h}" fill="#050202" opacity=".6"/>',
             f'<rect width="{w}" height="{h}" fill="url(#wv)"/>',
             ticks,
             f'<circle class="ring1" cx="{cx}" cy="{cy}" r="{outer + 28}" fill="none" stroke="{EMBER}" stroke-width="2" stroke-dasharray="3 12 40 12"/>',
@@ -507,18 +510,18 @@ def button(filename, label):
 def footer():
     w, h = 1200, 330
     slices, glitch_css, clips = glitch_copies(lambda c: title("THANKS FOR STOPPING BY", 600, 128, 74, c, 2, "middle"), w, [(70, 16), (100, 14)], 8)
-    body = [f'<rect width="{w}" height="{h}" fill="{BLACK}"/><g class="kb">{art("valley.webp", 0, -70, w, 584)}</g>',
+    body = [f'<rect width="{w}" height="{h}" fill="{BLACK}"/><g class="kb">{art("fields.webp", 0, -180, w, 584)}</g>',
             f'<rect width="{w}" height="{h}" fill="url(#fs)"/>',
             title("THANKS FOR STOPPING BY", 600, 128, 74, BONE, 2, "middle"), slices,
             text(MONO, "END OF LINE // THE TRAIL CONTINUES", 600, 164, 16, BONE, 4, "middle", 'class="blink"'),
             f'<path d="M0 {h}V286C200 270 420 292 640 278C860 266 1020 286 {w} 272V{h}Z" fill="{BLACK}"/>',
             f'<g class="run">{rider(0, 280, .85, BLACK)}</g>', f'<g class="run r2">{rider(0, 278, .6, "#160605", phase=.3)}</g>',
             scanlines(w, h, .2), brackets(12, 12, w - 24, h - 24, 28, BONE, 1.8)]
-    defs = (SCANLINES + gallop_defs() + clips + '<linearGradient id="fs" x2="0" y2="1"><stop offset="0" stop-color="#050202" stop-opacity=".86"/><stop offset=".52" stop-color="#050202" stop-opacity=".72"/><stop offset=".8" stop-color="#050202" stop-opacity="0"/></linearGradient>')
+    defs = (SCANLINES + gallop_defs() + clips + '<linearGradient id="fs" x2="0" y2="1"><stop offset="0" stop-color="#050202" stop-opacity=".66"/><stop offset=".42" stop-color="#050202" stop-opacity=".42"/><stop offset=".72" stop-color="#050202" stop-opacity="0"/></linearGradient>')
     style = (gallop_css() + glitch_css + ".kb{animation:kb 30s ease-in-out infinite alternate;transform-origin:50% 50%}@keyframes kb{from{transform:scale(1)}to{transform:scale(1.08)}}"
              ".blink{animation:bk 2.4s step-end infinite}@keyframes bk{70%{opacity:.25}}"
              ".run{animation:run 12s linear infinite}.r2{animation-delay:-1.4s}@keyframes run{from{transform:translateX(-160px)}to{transform:translateX(1360px)}}")
-    save("footer.svg", svg(w, h, "".join(body), "Thanks for stopping by. Riders gallop across a red mountain valley.", style, defs))
+    save("footer.svg", svg(w, h, "".join(body), "Thanks for stopping by. Riders gallop across golden fields at sunset.", style, defs))
 
 
 def fetch_activity():

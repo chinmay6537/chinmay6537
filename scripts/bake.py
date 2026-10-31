@@ -2,15 +2,19 @@
 """One-off art prep, run locally (needs pillow, numpy, scipy, potracer). Output is committed:
   art/*.webp        duotoned public-domain paintings, project screenshots and baked textures
   scripts/gallop.json  Muybridge's 1878 frames traced to vector silhouettes
-Usage: bake.py <sources dir>, holding img1..img3.jpg (Muybridge, Bierstadt, Remington) and shots/*.png
+  assets/reel.webp     short cut of the official launch trailer
+Usage: bake.py <sources dir>, holding img1.jpg (Muybridge), shots/*.png and official/ with the
+screenshots, launch.mp4 and frames from RDR2's Steam page (official Rockstar media, not redistributed
+beyond these graded crops)
 """
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
 import potrace
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from scipy import ndimage
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +35,51 @@ def duotone(image, stops, contrast=1.0):
     xs = [s[0] for s in stops]
     rgb = np.stack([np.interp(gray, xs, [s[1][c] for s in stops]) for c in range(3)], -1)
     return Image.fromarray(rgb.astype("uint8"))
+
+
+def grade(image, amount=.62, brightness=.92):
+    """Pulls official colour toward the game's black and blood red, keeping skin and sky readable."""
+    rgb = np.asarray(image.convert("RGB"), float) / 255
+    gray = rgb @ np.array([.3, .59, .11])
+    gray = np.clip(.5 + (gray - .5) * 1.22, 0, 1)
+    xs = [s[0] for s in HERO_STOPS]
+    tint = np.stack([np.interp(gray, xs, [s[1][c] for s in HERO_STOPS]) for c in range(3)], -1) / 255
+    out = (rgb * (1 - amount) + tint * amount) * brightness
+    return Image.fromarray((np.clip(out, 0, 1) * 255).astype("uint8"))
+
+
+def reel(video):
+    """A letterboxed trailer cut with the HUD burnt in, skipping logos and rating cards."""
+    cuts = [(22.2, 1.0), (26.3, 1.55), (29.85, 1.3), (34.9, .85), (27.95, 1.2), (38.25, .75), (14.6, 1.1), (49.85, 1.35)]
+    width, height, fps = 830, 350, 15
+    font = ImageFont.truetype(str(ROOT / "fonts" / "ShareTechMono-Regular.ttf"), 13)
+    frames, total = [], sum(c[1] for c in cuts)
+    scan = np.ones((height, width, 1))
+    scan[::3] = .8
+    for start, length in cuts:
+        command = ["ffmpeg", "-loglevel", "error", "-ss", str(start), "-t", str(length), "-i", str(video), "-an",
+                   "-vf", f"fps={fps},scale={width}:-2,crop={width}:{height}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+        data = subprocess.run(command, capture_output=True, check=True).stdout
+        cut = np.frombuffer(data, "uint8").reshape(-1, height, width, 3).astype(float)
+        for frame in cut:
+            elapsed = len(frames) / fps
+            graded = np.clip(frame * np.array([1.08, .9, .84]) * .95, 0, 255) * scan
+            image = Image.fromarray(graded.astype("uint8"))
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((0, 0, width, 26), fill=(5, 2, 2))
+            draw.rectangle((0, height - 26, width, height), fill=(5, 2, 2))
+            for x, y, dx, dy in [(10, 34, 1, 1), (width - 10, 34, -1, 1), (10, height - 34, 1, -1), (width - 10, height - 34, -1, -1)]:
+                draw.line((x, y, x + 20 * dx, y), fill=(241, 231, 208), width=2)
+                draw.line((x, y, x, y + 20 * dy), fill=(241, 231, 208), width=2)
+            if len(frames) % 14 < 9:
+                draw.ellipse((12, 8, 22, 18), fill=(211, 33, 31))
+            draw.text((30, 6), "RDR2 // OFFICIAL LAUNCH TRAILER", font=font, fill=(241, 231, 208))
+            draw.text((width - 190, 6), f"T+{elapsed:05.2f}s / {total:05.2f}s", font=font, fill=(241, 231, 208))
+            draw.text((12, height - 21), "(C) ROCKSTAR GAMES // FAN TRIBUTE", font=font, fill=(199, 154, 75))
+            frames.append(image)
+    path = ROOT / "assets" / "reel.webp"
+    frames[0].save(path, "WEBP", save_all=True, append_images=frames[1:], duration=round(1000 / fps), loop=0, quality=42, method=4)
+    print("reel.webp", len(frames), "frames", path.stat().st_size // 1024, "KB")
 
 
 def crop(image, x0, y0, x1, y1):
@@ -164,16 +213,18 @@ def trace_gallop():
 def main():
     ART.mkdir(exist_ok=True)
     trace_gallop()
-    remington = Image.open(SOURCE / "img3.jpg")
-    hero = crop(remington, .02, .13, .87, .84).resize((1200, 560), Image.LANCZOS)
-    save(duotone(hero, HERO_STOPS, 1.1), "hero.webp", 58)
-    bierstadt = Image.open(SOURCE / "img2.jpg")
-    save(duotone(crop(bierstadt, .0, .05, 1, .86).resize((1200, 584), Image.LANCZOS), STOPS, 1.2), "valley.webp", 58)
-    save(duotone(crop(bierstadt, .1, .0, 1, .8).resize((1000, 600), Image.LANCZOS).filter(ImageFilter.GaussianBlur(1.5)), DARK_STOPS, 1.1), "valley-dark.webp", 50)
+    official = SOURCE / "official"
+    arthur = crop(Image.open(official / "s03.jpg"), 0, .0, 1, .93)
+    save(grade(ImageOps.mirror(arthur).resize((1200, 560), Image.LANCZOS), .42, 1.6), "hero-arthur.webp", 68)
+    save(grade(ImageOps.mirror(crop(Image.open(official / "frame_22.7.jpg"), 0, .14, 1, .86)).resize((1200, 560), Image.LANCZOS), .45, 1.1), "hero-riders.webp", 66)
+    save(grade(crop(Image.open(official / "frame_35.3.jpg"), 0, .14, 1, .86).resize((1200, 560), Image.LANCZOS), .55, 1.05), "hero-gang.webp", 66)
+    save(grade(crop(Image.open(official / "s04.jpg"), 0, .25, 1, 1).resize((1200, 584), Image.LANCZOS), .35, 1.0), "fields.webp", 62)
+    save(grade(crop(Image.open(official / "s01.jpg"), 0, .05, 1, .95).resize((1000, 620), Image.LANCZOS), .75, .8), "gunmen.webp", 55)
     for name in ("bytepad", "accord", "proctorsense"):
         shot = Image.open(SOURCE / "shots" / f"{name}.png").convert("RGB")
         save(duotone(shot.resize((640, 400), Image.LANCZOS), DARK_STOPS, 1.0), f"shot-{name}.webp", 58)
-    save(duotone(crop(bierstadt, .35, .1, .95, .7).resize((640, 400), Image.LANCZOS), DARK_STOPS, 1.05), "shot-lms.webp", 55)
+    save(grade(Image.open(official / "s00.jpg").resize((640, 400), Image.LANCZOS), .55, .95), "shot-lms.webp", 58)
+    reel(official / "launch.mp4")
     paper(400, 600, "paper-poster.webp")
     paper(560, 580, "paper-journal.webp", (226, 208, 170))
     paper(1000, 520, "paper-map.webp")
